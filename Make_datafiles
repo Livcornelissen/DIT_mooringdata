@@ -1,0 +1,164 @@
+# -*- coding: utf-8 -*-
+"""
+
+
+Read data set Moorings 
+
+map of moorings
+
+"""
+
+
+import pandas as pd
+import numpy as np
+
+from netCDF4 import Dataset  
+
+import matplotlib.pyplot as plt
+import xarray as xr
+from shapely.geometry import LineString
+from glob import glob
+from datetime import datetime
+
+import os
+
+import random
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib as mpl
+import cmocean
+from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
+import matplotlib.ticker as mticker
+import matplotlib.patheffects as pe
+
+
+
+data_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/Coding/Data/'
+data_csvs = '/Users/cornelissenl/OneDrive - NIWA/PhD/Coding/Data/csvs/'
+missing_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/Coding/Data/missing/'
+code_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/Coding/'
+ds_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/Coding/Data/datasets/'
+figure_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/figures/'
+
+export_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/data/'
+
+#%% Read mooring data
+
+datafiles = sorted(glob(data_path+'*.csv*'))
+
+for i in range(len(datafiles[:1])):
+    data = pd.read_table(datafiles[i], sep='\s+',skiprows=20,encoding_errors='ignore')
+    print(i,'  ',os.path.basename(datafiles[i][:-4]), ' ')
+    
+    """
+    There are 2 different types of datasets, the ctd (microcat seabird/rcm) and the Aquadopp.
+    The date-time format is different between the 2.  In the aquadopp files the sec/min/hour are intergers while in microcat these are date-timestamps.
+    We make a dataset and data array with the corresponding headers.
+        
+    """
+    # try: #check if date information is integer. Which corresponds with the Aquadopp data.
+    if isinstance(data[data.columns[0]][0], int) or len(data.columns)==27:
+        data[data.columns[0]][0]+1
+        
+        column = 0
+        header = ['M','D','Y','H','m','s','errorcode','statuscode','u','v','w','A1','A2','A3','battery','sound speed','sound speed used','hdgt','pitch','roll','P','depth','T', 'analog 1','analog 2','speed','direction']
+        data = pd.read_table(datafiles[i], sep='\s+',encoding_errors='ignore')
+        data.columns = header
+        date1 = datetime(data['Y'][0], data['M'][0], data['D'][0], data['H'][0], data['m'][0], data['s'][0])
+        date2 = datetime(data['Y'][len(data)-1], data['M'][len(data)-1], data['D'][len(data)-1], data['H'][len(data)-1]\
+                         , data['m'][len(data)-1], data['s'][len(data)-1])
+        DateTime = pd.date_range(start =date1,end =date2, periods = len(data))
+        data.rename(columns = {'speed':'spe'}, inplace = True)
+        data.rename(columns = {'direction':'dirt'}, inplace = True)
+        
+        for l in range(8):
+            del data[header[l]]
+        
+        
+    else: # TypeError:
+        data = pd.read_table(datafiles[i], sep='\s+',skiprows=20,encoding_errors='ignore')
+        c = ['Date']+ pd.read_table(datafiles[i], sep='\s+',skiprows=18,header = 0,encoding_errors='ignore').columns.tolist()
+        units = ['Date']+ pd.read_table(datafiles[i], sep='\s+',skiprows=19,header = 0,encoding_errors='ignore').columns.tolist()
+        # print(c)
+        # print(units)
+        data.columns = c
+        DateTime = pd.date_range(start =data['Date'][0]+' '+ data['time'][0], \
+                    end =data['Date'][len(data)-1]+' '+ data['time'][len(data)-1], periods = len(data))
+        data.rename(columns = {'tem':'T'}, inplace = True)
+        data.rename(columns = {'pre':'P'}, inplace = True)
+        data.rename(columns = {'sal':'S'}, inplace = True)
+        data.rename(columns = {'speed':'spe'}, inplace = True)
+        data.rename(columns = {'direction':'dirt'}, inplace = True)
+        del data['Date']
+        del data['time']
+        
+        
+    data['DateTime'] =  pd.to_datetime(DateTime)
+    data = data.set_index('DateTime')
+    ds = data.to_xarray()
+    # print(data)
+    # print('   ')
+    if  os.path.basename(datafiles[i][-4]) == '.':
+        ds.to_netcdf(export_path +  os.path.basename(datafiles[i][:-4])+'.nc')
+        data.to_csv(export_path + os.path.basename(datafiles[i][:-4])+'.txt')
+    else:
+        ds.to_netcdf(export_path +  os.path.basename(datafiles[i][:-5])+'.nc')
+        data.to_csv(export_path + os.path.basename(datafiles[i][:-5])+'.txt')
+
+
+
+
+
+
+
+
+#%% 2018 DITS missing data
+
+
+header = ['timestamp','sig_t','depth','P','T','S']
+
+date1 = datetime(2018, 3, 7, 14, 0, 1)
+
+
+files = ['s1803DITS2_15240','s1803DITS3_15257','s1803DITS1_15239']
+
+for file in files:
+    data = pd.read_table(data_path+'SBEconversion/'+file+'.cnv',skiprows=20,delimiter=',', dtype = float)
+    
+    dates = pd.date_range(start =date1, freq = '120s', periods = len(data))
+    data.columns = header
+    
+    data['DateTime'] = dates
+    del data['timestamp']
+    
+    data = data.set_index('DateTime')
+    ds = data.to_xarray()
+    ds = ds.sel(DateTime = slice('03/09/2018','01/28/2020'))
+    ds.to_netcdf(export_path+os.path.basename(datafiles[0][:-4])+'.nc')
+
+#%%
+
+start_time = datetime(2018,3,7,14,00,00)
+
+datafiles = sorted(glob(missingpath+'*.txt'))
+
+header = ['scan count','timeJ','T','flag']
+header1 = ['T','potT','P','S','sigmat','time','flag']
+for i in range(len(datafiles)):
+    print(i)
+    data = pd.read_table(datafiles[i], sep='\s+',skiprows=0,encoding_errors='ignore')
+    try:
+        data.columns = header
+        del data['scan count']
+        del data['timeJ']
+    except:
+        data.columns = header1
+    time = pd.date_range(start =start_time, freq = '20s', periods = len(data))
+    data['DateTime'] = time
+    
+    del data['flag']
+    data = data.set_index('DateTime')
+    ds = data.to_xarray()
+    ds = ds.sel(DateTime = slice('03/10/2018','01/28/2020'))
+    ds.to_netcdf(export_path+os.path.basename(datafiles[i][:-8])+'.nc')
+    data.to_csv(export_path + os.path.basename(datafiles[i][:-8])+'.txt')
