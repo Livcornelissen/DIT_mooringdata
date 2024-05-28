@@ -1,0 +1,167 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Tue May  7 12:56:51 2024
+
+@author: cornelissenl
+
+Combine netcdf files
+
+"""
+
+
+
+
+import pandas as pd
+import numpy as np
+
+import gsw
+
+from netCDF4 import Dataset  
+
+import matplotlib.pyplot as plt
+import xarray as xr
+from shapely.geometry import LineString
+from glob import glob
+from datetime import datetime
+
+import os
+
+import random
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib as mpl
+import cmocean
+from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
+import matplotlib.ticker as mticker
+import matplotlib.patheffects as pe
+
+from datetime import date, timedelta
+
+
+figure_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/figures/'
+
+
+""" Windows """
+comp = '/Users/cornelissenl/'
+"""  Mac """
+# comp = '/Users/livcornelissen/Library/CloudStorage/'
+
+
+ 
+ 
+figure_path = comp +'OneDrive - NIWA/PhD/figures/'
+data_path = comp +'OneDrive - NIWA/PhD/Coding/Data/'
+data_csvs = comp +'OneDrive - NIWA/PhD/Coding/Data/csvs/'
+code_path = comp +'OneDrive - NIWA/PhD/Coding/'
+ds_path = comp + 'OneDrive - NIWA/PhD/Coding/Data/datasets/'
+
+
+folder = 'SEANOE/'
+
+
+data_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/data/'
+
+files = sorted(glob(data_path+'*.nc'))
+instruments = pd.read_csv(data_path + 'instrumentlist.csv')
+
+
+
+
+#%%
+
+"""
+This code combines the netcdf files per instrument to a netcdf file per mooring, per deployment year, per instrument type.
+You need a csv file that contains the 
+- filename
+- depth
+- (instrument) type
+- mooring
+- deployment year (dep_year)
+
+The output is a new netcdf file called: mooring_depyear_instrument.nc
+
+"""
+
+
+mooring = ['DITN','DITD','DITS']
+depyear = [1412,1512,1702,1803,1901,2003]
+instr = ['rcm9','SBE56','SBE37SM','AQD']
+
+
+for yr in depyear:
+    for m in range(3):
+        for i in instr:
+            save = 0
+            ds = xr.Dataset( attrs = {'description': 'Mooring '+ mooring[m] +' ' + str(yr) + ' ' + i })
+            for f in range(len(instruments)):
+                if instruments['dep_year'][f] == yr and instruments['type'][f] == i and instruments['mooring'][f] == mooring[m]:
+                    save = 1
+                    data = xr.open_dataset(data_path + instruments['filename'][f]+'.nc')
+                    data = data.expand_dims({'z':[instruments['depth'][f]]})
+                    ds = ds.merge(data)
+
+            if save == 1:
+                ds.to_netcdf(data_path+folder+mooring[m]+'_'+str(yr)+'_'+i+'.nc')
+        
+
+
+
+
+
+#%% slice data
+
+
+# if the data set has the upcast and down cast and recorded while being on deck,
+# use this function to slice the data.
+files =sorted(glob(data_path+'c1803DITS*.nc')) #make a list of files
+
+"""
+Input:
+    list of files
+    start and finish times format dd-mm-yyy
+output:
+    saves a new netcdf file names 'basename'_sliced.nc
+
+"""
+
+def slice_data (files,start, finish):
+    
+    start = pd.to_datetime(start, dayfirst = True)
+    finish= pd.to_datetime(finish, dayfirst = True)
+    for i in files:
+        data = xr.open_dataset(i)
+        data = data.sel(DateTime = slice(start,finish))
+        data.to_netcdf(os.path.basename(i[:-3])+'_sliced.nc')
+      
+        
+
+slice_data(files, '9-3-2018', '29,1,2020')
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
