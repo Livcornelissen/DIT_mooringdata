@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-
+@author: Liv Cornelissen
 
 Read data set Moorings 
-
-map of moorings
 
 """
 
@@ -16,29 +14,17 @@ from netCDF4 import Dataset
 
 import matplotlib.pyplot as plt
 import xarray as xr
-from shapely.geometry import LineString
 from glob import glob
 from datetime import datetime
-
 import os
 
-import random
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
-import matplotlib as mpl
-import cmocean
-from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
-import matplotlib.ticker as mticker
-import matplotlib.patheffects as pe
 
-
-
-data_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/Coding/Data/'
-data_csvs = '/Users/cornelissenl/OneDrive - NIWA/PhD/Coding/Data/csvs/'
-missing_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/Coding/Data/missing/'
-code_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/Coding/'
-ds_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/Coding/Data/datasets/'
-figure_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/figures/'
+#path where you have the raw data
+data_path = ''
+# path where you export the 
+data_csvs = ''
+# path where you export the netcdf files to
+ds_path = ''
 
 export_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/data/'
 
@@ -109,56 +95,3 @@ for i in range(len(datafiles[:1])):
 
 
 
-
-
-
-#%% 2018 DITS missing data
-
-
-header = ['timestamp','sig_t','depth','P','T','S']
-
-date1 = datetime(2018, 3, 7, 14, 0, 1)
-
-
-files = ['s1803DITS2_15240','s1803DITS3_15257','s1803DITS1_15239']
-
-for file in files:
-    data = pd.read_table(data_path+'SBEconversion/'+file+'.cnv',skiprows=20,delimiter=',', dtype = float)
-    
-    dates = pd.date_range(start =date1, freq = '120s', periods = len(data))
-    data.columns = header
-    
-    data['DateTime'] = dates
-    del data['timestamp']
-    
-    data = data.set_index('DateTime')
-    ds = data.to_xarray()
-    ds = ds.sel(DateTime = slice('03/09/2018','01/28/2020'))
-    ds.to_netcdf(export_path+os.path.basename(datafiles[0][:-4])+'.nc')
-
-#%%
-
-start_time = datetime(2018,3,7,14,00,00)
-
-datafiles = sorted(glob(missingpath+'*.txt'))
-
-header = ['scan count','timeJ','T','flag']
-header1 = ['T','potT','P','S','sigmat','time','flag']
-for i in range(len(datafiles)):
-    print(i)
-    data = pd.read_table(datafiles[i], sep='\s+',skiprows=0,encoding_errors='ignore')
-    try:
-        data.columns = header
-        del data['scan count']
-        del data['timeJ']
-    except:
-        data.columns = header1
-    time = pd.date_range(start =start_time, freq = '20s', periods = len(data))
-    data['DateTime'] = time
-    
-    del data['flag']
-    data = data.set_index('DateTime')
-    ds = data.to_xarray()
-    ds = ds.sel(DateTime = slice('03/10/2018','01/28/2020'))
-    ds.to_netcdf(export_path+os.path.basename(datafiles[i][:-8])+'.nc')
-    data.to_csv(export_path + os.path.basename(datafiles[i][:-8])+'.txt')
