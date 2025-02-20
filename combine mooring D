@@ -1,0 +1,312 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Feb 19 13:20:18 2025
+
+@author: cornelissenl
+
+
+fuction 1:
+Open Mooring D data and export to xarray datasets
+
+function 2:
+alining the start time when there is a small shift
+
+function 3:
+combine all datafiles into hourly netcdf
+
+
+"""
+
+import scipy.io
+
+import pandas as pd
+import numpy as np
+
+import matplotlib.pyplot as plt
+import xarray as xr
+import gsw
+import os
+from glob import glob
+
+import random
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
+from datetime import date, timedelta, datetime
+
+from datetime import datetime
+import matplotlib as mpl
+import cmocean
+
+import matplotlib.ticker as mticker
+import matplotlib.patheffects as pe
+from contextlib import suppress
+
+
+
+data_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/mooring D/'
+export_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/data/Mooring D/'
+
+folders = ['D_2014_2016','D_2016_2017','D_2017_2019','D_2019_2020',\
+           'D_2020_2021','D_2021_2022','D_2022_2023','D_2023_2024']
+
+files = sorted(glob(data_path + 'D_2014_2016/*.mat'))
+
+#%%
+
+
+def mat_to_xarray(mat_file):
+    """
+    Load a MATLAB .mat file, extract `data.dat`, and convert it to an xarray Dataset.
+
+    Parameters:
+        mat_file (str): Path to the MATLAB .mat file.
+
+    Returns:
+        xarray.Dataset: Dataset containing MATLAB variables as DataArrays.
+    """
+    # Load .mat file
+    mat_data = scipy.io.loadmat(mat_file, struct_as_record=False, squeeze_me=True)
+
+    # Extract 'dat' structure
+    if 'dat' not in mat_data:
+        raise KeyError("No 'dat' structure found in the .mat file.")
+    
+    dat = mat_data['dat']
+    hdr = mat_data['hdr']
+    # for field_name in hdr._fieldnames:
+    #     print(f"{field_name}: {getattr(hdr, field_name)}")
+    
+    
+    # extract the start_time, stop_time and sampling interval from the header file
+    start_time = pd.to_datetime(getattr(hdr, 'start_time', None),dayfirst=True)
+    stop_time = pd.to_datetime(getattr(hdr, 'stop_time', None),dayfirst=True)
+    samp_int_minutes = getattr(hdr, 'samp_int_minutes', None)
+    depth =  abs(round(float(getattr(hdr, 'instr_depth_meters', None))))
+        
+    # In some data sets, the sampling time is given in seconds,
+    # and the sampling variable is empty - we convert this here to minutes
+    # print the sampling times and start and stop time to double check.
+    if samp_int_minutes is None:
+        samp_int_minutes = getattr(hdr, 'samp_int_seconds', None)/60
+        print(os.path.basename(f) , ' sampling in minutes ' )
+        print(start_time, ',', stop_time,',',samp_int_minutes )
+    # In case either the start, stop or sampling time is not defined in the header:
+    if start_time is None or stop_time is None or samp_int_minutes is None:
+        print(start_time, ',', stop_time,',',samp_int_minutes )
+        print(os.path.basename(f) , ' check time' )
+    
+    # make the date array based on the start, stop time and sampling frequency in minutes
+    date_range = pd.date_range(start=start_time, end = stop_time, freq=str(samp_int_minutes)+'min')
+    dataset_dict = {}
+    
+    length = len(date_range)
+    
+    # Extract field names and their values
+    for field_name in dat._fieldnames:
+        if field_name.lower() == 'datetime':
+            pass
+        else:
+            var_data = getattr(dat, field_name)
+    
+            # Ensure data is a NumPy array
+            if isinstance(var_data, np.ndarray):
+                if len(var_data)> length:
+                    dataset_dict[field_name] = (["depth", "DateTime"], [var_data[:length]]) 
+                elif len(var_data)< length:
+                    var_data = np.append(var_data, [np.nan]*(length - len(var_data)))
+                    dataset_dict[field_name] = (["depth","DateTime"], [var_data])  
+                else:
+                    dataset_dict[field_name] = (["depth","DateTime"], [var_data])  
+
+    # Convert to xarray Dataset
+
+    dataset = xr.Dataset(dataset_dict,  coords={"DateTime": date_range,'depth':[depth]})
+    dataset.attrs['source'] = os.path.basename(f)
+    dataset.attrs['sampling_interval'] = samp_int_minutes
+    dataset.attrs['created_on'] = pd.to_datetime('now').strftime('%Y-%m-%d %H:%M:%S')
+    # print(dataset)
+    return dataset
+
+for folder in folders:
+    files = sorted(glob(data_path + folder+ '/*.mat'))
+    for f in files:
+        # print(f)
+        dataset = mat_to_xarray(f)
+        dataset.to_netcdf(export_path + os.path.basename(f)[:-4] + '.nc')
+        
+
+#%%
+
+datafiles = sorted(glob(export_path + '*.nc'))
+
+for f in datafiles:
+    data = xr.open_dataset(f)
+    print(os.path.basename(f), ',' ,data.DateTime[0].data, ',' ,data.sampling_interval)
+    mat_data = scipy.io.loadmat(mat_file, struct_as_record=False, squeeze_me=True)
+#%%
+
+
+def instrument_list(mat_file):
+    mat_data = scipy.io.loadmat(mat_file, struct_as_record=False, squeeze_me=True)
+    
+    hdr = mat_data['hdr']
+    return(hdr)
+    
+
+filename = []
+depth = []
+Type = []
+dep_year = []
+start_time = []
+stop_time = []
+interval = []
+
+
+for folder in folders:
+    files = sorted(glob(data_path + folder+ '/*.mat'))
+    for f in files:
+
+        hdr = instrument_list(f)
+        samp_int_minutes = getattr(hdr, 'samp_int_minutes', None)
+        if samp_int_minutes is None:
+            samp_int_minutes = getattr(hdr, 'samp_int_seconds', None)/60
+
+        dep_year.append(folder[2:])
+        filename.append(os.path.basename(f)[:-4])
+        start_time.append(pd.to_datetime(getattr(hdr, 'start_time', None),dayfirst=True))
+        stop_time.append(pd.to_datetime(getattr(hdr, 'stop_time', None),dayfirst=True))
+        interval.append(samp_int_minutes)
+        depth.append(abs(float((getattr(hdr, 'instr_depth_meters', None)))))
+        Type.append(getattr(hdr, 'instr_type', None))
+        
+
+df = pd.DataFrame({
+    'filename': filename,
+    'depth': depth,
+    'type': Type,
+    'dep_year': dep_year,
+    'start_Time': start_time,
+    'stop_Time': stop_time,
+    'interval': interval,
+    
+})
+
+# Export to CSV file
+csv_path = data_path + "instrument_list.csv"  
+df.to_csv(csv_path, index=False)
+
+
+
+#%%
+
+"""
+ get first start time deployment year for each instrument
+ 
+ make dataset with nanvalues with the for the total time (start = first deployment time,
+                                                          stop = last deployment time)
+ 
+
+"""
+
+# data1 = data.resample(DateTime="h").mean()
+# data1.to_netcdf(export_path +'hourly_datasets/'+ os.path.basename(datafiles[-1]))
+
+# dataset = xr.open_mfdataset(export_path +'hourly_datasets/'+"/*.nc", combine="by_coords")
+# instrumentlist = pd.open_csv(data_path + "instruments.csv"  )
+
+for i in range(len(ncfiles)):
+    print(os.path.basename(ncfiles[i]),instrumentlist['depth'][i], instrumentlist['start_Time'][i] )
+
+
+#%%
+
+"""
+Make dataset with datetime series to prevent any gaps in dataset
+We need to assign a variable - so adding a list of nan values
+
+We then merge the DITN datasets from the SEANOE folder, these are all quality checked
+At the end we remove the 'nan' variable.
+
+"""
+
+
+
+ncfiles = sorted(glob(export_path+'*.nc'))
+DateTime = pd.date_range(start=datetime(2014,1,21,12,0), \
+                         end=datetime(2024,1,24,19,30), freq='h')
+instrumentlist = pd.read_csv(data_path + "instruments.csv")
+
+#%%
+print(datetime.now())
+lat = -75.13587
+lon = 164.5549
+
+
+dataset = xr.Dataset(
+    {
+        "nan": (["DateTime"], np.full(len(DateTime), np.nan)),
+        
+    },
+    coords={
+        "DateTime": DateTime
+    },
+    attrs = {'description': 'Mooring data Mooring D'}
+)
+
+
+
+for f in ncfiles:
+    print(os.path.basename(f))
+    ds = xr.open_dataset(f).resample(DateTime = 'h').mean()
+    
+    # rename variables with in DITx used names
+    with suppress(ValueError):
+        ds = ds.rename({'T_0':'T'})
+    with suppress(ValueError):
+        ds = ds.rename({'Depth_0':'depth'})
+    with suppress(ValueError):        
+        ds = ds.rename({'Depth':'z'})
+    with suppress(ValueError):
+        ds = ds.rename({'U_0':'u'})
+    with suppress(ValueError):
+        ds = ds.rename({'V_0':'v'})
+    with suppress(ValueError):
+        ds = ds.rename({'Dir_0':'dirt'})
+    with suppress(ValueError):
+        ds = ds.rename({'Turbidity':'turbidity'})
+    with suppress(ValueError):
+        ds = ds.rename({'Mod_0':'spe'})
+    with suppress(ValueError):
+        ds = ds.rename({'Heading':'heading'})
+    with suppress(ValueError):
+        ds = ds.rename({'Temperature':'T'})
+        
+    # rename the calibrated salinity to S
+    # s = 0
+    # rename_dicts = [{'S_2': 'S'}, {'S_1': 'S'}, {'S_0': 'S'}]
+    # for rename_dict in rename_dicts:
+    #     try:
+    #         ds = ds.rename(rename_dict)  # Assign back to ds
+    #         s += 1
+    #         break  # Stop once renamed successfully
+    #     except KeyError:
+    #         pass  # If rename fails, continue trying other options
+    for sal_var in ['S_0','S_2', 'S_1' ]:
+        if sal_var in ds:
+            ds = ds.rename({sal_var: 'S'})
+            break  # Stop after first successful rename
+
+    z = instrumentlist['mean_depth'][np.where(instrumentlist['filename'] == os.path.basename(f)[:-3])[0]].item()
+    start = instrumentlist['slice_1'][np.where(instrumentlist['filename'] == os.path.basename(f)[:-3])[0]].item()
+    stop = instrumentlist['slice_2'][np.where(instrumentlist['filename'] == os.path.basename(f)[:-3])[0]].item()
+    start = pd.to_datetime(start,dayfirst=True)
+    stop = pd.to_datetime(stop,dayfirst=True)
+    ds = ds.sel(DateTime = slice(start,stop))
+    ds = ds.assign_coords(depth = [z])
+    # ds = ds.rename({'DateTime':'time'})
+    dataset = dataset.merge(ds)
+
+dataset.rename({'DateTime':'time'})
+dataset.drop_vars('nan')
+dataset.to_netcdf(export_path + 'Mooring_D.nc')
