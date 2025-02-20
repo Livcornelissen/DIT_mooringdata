@@ -1,0 +1,339 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed May  1 14:05:52 2024
+
+@author: cornelissenl
+
+Location plot
+
+
+
+
+"""
+
+
+
+
+
+import pandas as pd
+import numpy as np
+
+from netCDF4 import Dataset  
+
+import matplotlib.pyplot as plt
+import xarray as xr
+from shapely.geometry import LineString
+from glob import glob
+from datetime import datetime
+import sys
+import os
+
+import random
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib as mpl
+import cmocean as cm
+from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
+import matplotlib.ticker as mticker
+import matplotlib.patheffects as pe
+from matplotlib_scalebar.scalebar import ScaleBar
+
+sys.path.append( '/Users/cornelissenl/OneDrive - NIWA/PhD/MITgcm/pythonfiles' )
+from ps_ll import xy2ll,ll2xy
+
+sys.path.append( '/Users/cornelissenl/OneDrive - NIWA/PhD/MITgcm/pythonfiles' )
+from ncbinary import read_binary,write_binary
+
+
+data_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/data/'
+data_csvs = '/Users/cornelissenl/OneDrive - NIWA/PhD/Coding/Data/csvs/'
+missingpath = '/Users/cornelissenl/OneDrive - NIWA/PhD/Coding/Data/missing/'
+code_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/Coding/'
+ds_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/Coding/Data/datasets/'
+figure_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/figures/'
+bed_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/MITgcm/bedmachine3/'
+
+
+
+
+year = ['1412','1512','1702','1803','1901','2003']
+N_loc = [[-75.21612,164.44971],[-75.21605,164.44918],\
+         [-75.21646,164.44788],[-75.21660,164.44581],[-75.20914, 164.48951],[75.20958, 164.49021]]
+D_loc = [[np.nan,np.nan],[np.nan,np.nan],\
+         [-75.16542 ,164.04038 ],[-75.16640 ,164.04260 ],[-75.16597 , 164.04198 ],[]]
+S_loc = [[np.nan,np.nan],[np.nan,np.nan],\
+         [-75.29305 ,163.10461 ],[-75.29313 ,163.12521 ],[np.nan,np.nan]]    
+    
+    
+#%%
+bedmachine = xr.open_dataset(bed_path + 'BedMachineAntarctica-v3.nc')
+
+TNB = bedmachine.sel(x = slice(2.5e5,5.5e5-1), y = slice(-1.45e6,-1.67e6+1))
+
+bedmachine.bed.sel(x = slice(2.5e5,5.5e5), y = slice(-1.45e6,-1.67e6)).plot(vmin = -1200, vmax = 0)
+plt.gca().invert_yaxis()
+plt.gca().invert_xaxis()
+
+#%%
+bed = bedmachine.bed.sel(x = slice(2.5e5+500,5.5e5), y = slice(-1.45e6,-1.67e6 +500))
+
+mask = bedmachine.mask.sel(x = slice(2.5e5,5.5e5-1), y = slice(-1.45e6,-1.67e6+1))
+icemap = bedmachine.sel(x = slice(2.5e5,5e5-1), y = slice(-1.45e6,-1.67e6+1))
+ice = icemap.thickness-icemap.surface
+tnbx = icemap.x.astype(float)
+tnby = icemap.y.astype(float)
+
+# cast xs and ys as float. `xy2ll` will not return correct results
+# otherwise.
+ds = bed
+xs = ds.x.astype(float)
+ys = ds.y.astype(float)
+
+
+
+"""
+
+	Converts Polar  Stereographic (X, Y) coordinates for the polar regions to
+	latitude and longitude Stereographic (X, Y) coordinates for the polar
+	regions.
+
+"""
+
+#centre of grid cell.
+latc, lonc = xy2ll(
+    xs,
+    ys,
+    -1,  # -1 is a flag indicating the southern hemisphere.
+)
+latmask, lonmask = xy2ll(
+    mask.x.astype(float),
+    mask.y.astype(float),
+    -1,  # -1 is a flag indicating the southern hemisphere.
+)
+#centre of grid cell.
+latice, lonice = xy2ll(tnbx,tnby,-1,  # -1 is a flag indicating the southern hemisphere.
+)
+
+
+
+#%%
+
+
+
+masked = mask.where(mask != 0.)
+
+
+plt.contour(lonc.T,latc.T,bed, levels = np.arange(-1200,0,100))
+colors = ['slategrey','powderblue','white']
+plt.contourf(lonmask,latmask,masked.T, levels = [0.1,2.9,5], colors = colors, )
+plt.colorbar()
+
+#%%
+ditn_lat = -75.36076666666666
+ditn_lon = 164.7464
+
+ditd_lat = -75.2757
+ditd_lon = 164.0673
+
+dits_lat = - 75.4884166
+dits_lon = 163.17435
+
+MooringD_lat = - 75.166
+MooringD_lon = 164.597
+
+LDEO_lat = -75.07
+LDEO_lon = 163.96
+
+AWSmanuela_lat = -74.95
+AWSmanuela_lon = 163.68
+
+bedm = bed.where(mask ==0.)
+
+
+"""
+
+Start making the figure
+
+"""
+
+
+fig, ax = plt.subplots(figsize = (10,10),subplot_kw=dict(projection=ccrs.SouthPolarStereo()))
+
+ax.set_extent((162.8, 170., -74.5 , -75.8))
+# ax.set_extent((162.8, 166., -74.5 , -75.6))
+gl = ax.gridlines(crs=ccrs.PlateCarree(), linewidth=.5, color='black', alpha=0.5,linestyle    ='--', draw_labels=True,y_inline=False)
+gl.top_labels = False
+gl.left_labels = True
+gl.right_labels=False
+gl.xlines = True
+
+gl.xlocator = mticker.FixedLocator(np.arange(160,175))
+gl.ylocator = mticker.FixedLocator(np.arange(-77.5,-70.5,0.5))
+
+plt.gca().invert_yaxis()
+plt.gca().invert_xaxis()
+
+
+# I do not keep the coastlines as this is not well represented in Antarctica. 
+# ax.coastlines(resolution = '50m')
+ 
+im = ax.contourf(lonc[:-1,:].T,latc[:-1,:].T,bedm,cmap='Greys',\
+                 levels = np.arange(-1400,0,50),transform =ccrs.PlateCarree(), alpha = 0.2)
+ax.contourf(lonmask,latmask,masked.T, transform =ccrs.PlateCarree(), levels = [0.1,2.9,5], colors = colors)
+
+im = ax.contour(lonc[:-1,:].T,latc[:-1,:].T,bedm,colors='black',linewidths = 1, linestyles = 'solid' ,\
+                levels = np.arange(-1400,-10,200),transform =ccrs.PlateCarree(), alpha = 0.7)
+ax.clabel(im, inline=True, fontsize=10)
+
+plt.scatter(ditn_lon,ditn_lat,c = 'tab:purple', s = 222,marker ="*",transform = ccrs.PlateCarree(), label = 'DITN')
+plt.scatter(ditd_lon,ditd_lat,c = 'tab:green', s = 222,marker ="*",transform = ccrs.PlateCarree(), label = 'DITD')
+plt.scatter(dits_lon,dits_lat,c = 'tab:orange', s = 222,marker ="*",transform = ccrs.PlateCarree(), label = 'DITS')
+
+# plt.scatter(MooringD_lon,MooringD_lat,c = 'mediumblue', s = 222,marker ="*",transform = ccrs.PlateCarree(), label = 'Mooring D')
+# plt.scatter(LDEO_lon,LDEO_lat,c = 'deeppink', s = 222,marker ="*",transform = ccrs.PlateCarree(), label = 'LDEO')
+# plt.scatter(AWSmanuela_lon,AWSmanuela_lat,c = 'black', s = 222,marker ="*",transform = ccrs.PlateCarree(), label = 'AWS')
+
+
+scalebar = ScaleBar(1, units="m", location="upper left", scale_loc="bottom", length_fraction=.1)
+ax.add_artist(scalebar)
+
+plt.legend(loc = 'lower left')
+
+plt.savefig(figure_path+'Bathy_mooring.png',bbox_inches='tight')
+# plt.savefig(figure_path+'Instruments_bathy_map.png',bbox_inches='tight')
+
+
+#%% model figure
+
+
+bedm = bed.where(mask ==0.)
+fig, ax = plt.subplots(figsize = (8,8),subplot_kw=dict(projection=ccrs.SouthPolarStereo()))
+
+ax.set_extent((162.8, 170., -74.5 , -75.9))
+gl = ax.gridlines(crs=ccrs.PlateCarree(), linewidth=.5, color='black', alpha=0.5,linestyle    ='--', draw_labels=True,y_inline=False)
+gl.top_labels = False
+gl.left_labels = True
+gl.right_labels=False
+gl.xlines = True
+gl.xlocator = mticker.FixedLocator(np.arange(160,171,2))
+gl.ylocator = mticker.FixedLocator(np.arange(-76.5,-73.5,0.5))
+plt.gca().invert_yaxis()
+plt.gca().invert_xaxis()
+
+
+
+im = ax.contourf(lonc[:-1,:].T,latc[:-1,:].T,bedm,cmap='Greys',\
+                  levels = np.arange(-1400,0,50),transform =ccrs.PlateCarree(), alpha = 0.1)
+ax.contourf(lonice,latice,ice.T,levels = np.arange(50,2000,100), transform =ccrs.PlateCarree(),cmap=cmocean.cm.ice_r)
+
+im = ax.contour(lonc[:-170,:].T,latc[:-170,:].T,bedm[:,:430], colors='black',linewidths = 1, linestyles = 'solid' ,\
+                levels = np.arange(-1400,-10,200),transform =ccrs.PlateCarree(), alpha = 0.7)
+ax.clabel(im, inline=True, fontsize=10)
+
+
+# %% 
+
+ds = bedmachine.sel(x =  slice(-8.5e5,5.5e5), y = slice(-.45e6,-2.67e6))
+bedm = ds.where(mask ==0.)
+bedmachine = xr.open_dataset(bed_path + 'BedMachineAntarctica-v3.nc')
+bedRS = bedmachine.bed.sel(x = slice(-8.5e5,5.5e5), y = slice(-.45e6,-2.67e6))
+maskRS  = bedmachine.mask.sel(x = slice(-8.5e5,5.5e5), y = slice(-.45e6,-2.67e6))
+
+maskedRS = maskRS.where(maskRS != 0.)
+bedmaskedRS = bedRS.where(maskRS == 0.)
+
+lonbedrs,latbedrs = xy2ll(
+    ds.x.astype(float),
+    ds.y.astype(float),
+    -1,  # -1 is a flag indicating the southern hemisphere.
+)
+
+
+
+plt.contourf(lonbedrs,latbedrs,bedmaskedRS)
+bedmaskedRS.plot(vmin = -1200, vmax = 0)
+maskedRS.plot(levels = [.1,2.5,5], cmap = 'Blues_r', )
+plt.gca().invert_yaxis()
+plt.gca().invert_xaxis()
+
+#%%
+fig, ax = plt.subplots(figsize = (10,10),subplot_kw=dict(projection=ccrs.SouthPolarStereo()))
+
+gl = ax.gridlines(crs=ccrs.PlateCarree(), linewidth=.5, color='black', alpha=0.5,linestyle    ='--', draw_labels=True,y_inline=False)
+gl.top_labels = False
+gl.left_labels = True
+gl.right_labels=False
+gl.xlines = True
+
+gl.xlocator = mticker.FixedLocator(np.arange(160,171,2))
+gl.ylocator = mticker.FixedLocator(np.arange(-76.5,-73.5,0.5))
+# gl.ylabel_style = {'color': 'red', 'weight': 'bold'}
+plt.gca().invert_yaxis()
+plt.gca().invert_xaxis()
+# ax.coastlines(resolution = '50m')
+im = ax.contourf(lonbedrs,latbedrs,bedmaskedRS.T,cmap='Greys',\
+                 levels = np.arange(-1400,0,50),transform =ccrs.PlateCarree(), alpha = 0.2)
+ax.contourf(lonbedrs,latbedrs,maskedRS.T, transform =ccrs.PlateCarree(), levels = [0.1,2.9,5], cmap = 'Blues_r')
+
+im = ax.contour(lonbedrs,latbedrs,bedmaskedRS.T,colors='black',linewidths = 1, linestyles = 'solid' ,\
+                levels = np.arange(-1400,-10,200),transform =ccrs.PlateCarree(), alpha = 0.7)
+ax.clabel(im, inline=True, fontsize=10)
+
+
+
+#%% Antarctica Ross sea figure
+
+bedmachine = xr.open_dataset(bed_path + 'BedMachineAntarctica-v3.nc')
+
+#%%
+bedm = bedmachine.where(mask ==0.)
+
+east = bedmachine.sel(x = slice(-833000,-300), y = slice(1000,-3.67e6+1))
+bedmeast = bedm.sel(x = slice(-833000,-300), y = slice(1000,-3.67e6+1))
+
+loneast,lateast = xy2ll(
+    east.x.astype(float),
+    east.y.astype(float),
+    -1,  # -1 is a flag indicating the southern hemisphere.
+)
+
+west = bedmachine.sel(x = slice(0,9e5-1), y = slice(-1,-3.67e6+1))
+bedmwest = bedm.sel(x = slice(0,9e5-1), y = slice(-1,-3.67e6+1))
+
+lonwest,latwest = xy2ll(
+    west.x.astype(float),
+    west.y.astype(float),
+    -1,  # -1 is a flag indicating the southern hemisphere.
+)
+
+
+#%%
+
+colors = ['lightgray','powderblue','white']
+fig, ax = plt.subplots(figsize=(22,22), subplot_kw={'projection': ccrs.SouthPolarStereo(180)})
+
+# Set map extent to focus on Antarctica
+ax.set_extent([-160,160, -85, -65], crs=ccrs.PlateCarree())  # Covers Antarctica
+
+# Add features
+ax.add_feature(cfeature.LAND, color='lightgray')  # Landmass
+ax.add_feature(cfeature.COASTLINE, edgecolor='black')  # Coastline
+ax.add_feature(cfeature.BORDERS, linestyle=":")  # Country borders
+
+ax.contour(lateast,loneast,bedmeast.bed.T,colors='black',linewidths = 1, linestyles = 'solid' ,\
+                levels = np.arange(-2000,-10,200),transform =ccrs.PlateCarree(), alpha = 0.5)
+    
+ax.contour(latwest,lonwest,bedmwest.bed.T,colors='black',linewidths = 1, linestyles = 'solid' ,\
+                levels = np.arange(-2000,-10,200),transform =ccrs.PlateCarree(), alpha = 0.5)
+
+ax.contourf(lateast.T,loneast.T,east.mask, transform =ccrs.PlateCarree(), levels = [0.1,2.9,5], colors = colors)
+ax.contourf(latwest.T,lonwest.T,west.mask, transform =ccrs.PlateCarree(), levels = [0.1,2.9,5], colors = colors)
+# Add gridlines
+gl = ax.gridlines(draw_labels=True, linestyle="--", color="gray", alpha=0.5)
+gl.right_labels = True  # Hide labels on the right
+gl.top_labels = True    # Hide labels on the top
+
+# Display the map
+plt.savefig(figure_path + 'Ross_sea.png',bbox_inches='tight')
+plt.show()
+
