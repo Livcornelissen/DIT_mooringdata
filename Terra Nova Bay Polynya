@@ -1,0 +1,631 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Nov 28 11:54:43 2024
+
+@author: cornelissenl
+
+
+Timeseries with dates to identify polynya events,
+based on 25m/s wind and open polynya
+
+
+
+"""
+
+
+
+import pandas as pd
+import numpy as np
+
+import gsw
+from windrose import WindroseAxes
+
+from netCDF4 import Dataset  
+
+import matplotlib.pyplot as plt
+import xarray as xr
+from shapely.geometry import LineString
+from glob import glob
+from datetime import datetime
+
+import os
+
+import random
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib as mpl
+import cmocean
+from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
+import matplotlib.ticker as mticker
+import matplotlib.patheffects as pe
+from matplotlib.colors import LogNorm
+from decimal import Decimal
+import matplotlib
+
+from datetime import date, timedelta
+
+
+figure_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/figures/'
+
+
+
+comp = '/Users/cornelissenl/'
+
+ 
+ 
+figure_path = comp +'OneDrive - NIWA/PhD/figures/'
+data_path = comp +'OneDrive - NIWA/PhD/data/'
+data_in= comp +'OneDrive - NIWA/PhD/data/SEANOE/'
+code_path = comp +'OneDrive - NIWA/PhD/Coding/'
+ds_path = comp +'OneDrive - NIWA/PhD/Data/calibrated/'
+
+
+DITN = xr.open_dataset(data_in + 'DITN_mooring.nc')
+
+RS = xr.open_dataset(data_path + 'artist/SIC_Artist.nc')
+
+TNB_SIC = xr.open_dataset(data_path + 'output/TNB_SIC.nc')
+
+MW = xr.open_dataset(data_path + 'Manuela_station/manuela_jan_2025.nc')
+
+MW_days = MW.resample(time="D").mean()
+
+
+colors = ['tab:blue','tab:green','tab:orange','tab:purple','tab:gray',\
+          'tab:pink','tab:red','tab:cyan','tab:olive']
+months = ['zero','January','February','March','April','May','June','July','August','September','October','November','December']
+doy = np.cumsum([0,31,28,31,30,31,30,31,31,30,31,30])
+years = ['2015','2016','2017','2018','2019','2020','2021','2022','2023','2024']
+
+
+
+
+n2 = DITN.N2
+n2[np.where(abs(n2)>1e-3)] = np.nan
+ds = DITN
+ds['N2'] = n2
+
+
+Sa = np.arange(32,36,0.01)
+Freezing_line = gsw.t_freezing(Sa,np.zeros(len(Sa)),np.zeros(len(Sa)))
+Tc = np.arange(-2.1,.5,0.01)
+
+Density_lines = []
+for ct in Tc:
+    rho = gsw.rho(Sa,np.ones(len(Sa))*ct,np.zeros(len(Sa)))
+    Density_lines.append(rho)
+
+
+#%%
+
+pol_North = []
+pol_South = []
+pol_TNB = []
+
+
+daterange = pd.date_range('2014-12-01','2024-10-30', freq = 'd')
+
+for t in daterange:
+    if t.month >=3 and t.month <=11:
+        wind = MW_days.sel(time = t)
+        TNB = TNB_SIC.sel(time = t)
+        if wind.windspeed >= 25 and wind.wind_dir > 180 and TNB.TNB_north <50:
+            pol_North.append(t)
+        if wind.windspeed >= 25 and wind.wind_dir > 180 and TNB.TNB_south <50:
+            pol_South.append(t)
+        if wind.windspeed >= 25 and wind.wind_dir > 180 and TNB.TNB_large <50:
+            pol_TNB.append(t)
+        
+        
+#%%
+
+polynya_event = np.zeros([5,10,12]) # [area,year,month]
+daterange = pd.date_range('2014-12-01','2023-10-13', freq = 'd')
+
+for t in daterange:
+    wind = MW_days.sel(time = t)
+    TNB = TNB_SIC.sel(time = t)
+    if wind.windspeed >= 25 and wind.wind_dir > 180:
+        polynya_event[4,t.year-2015,t.month-1] +=1
+    if t.month >=3 and t.month <=11 :
+        if wind.windspeed >= 25 and wind.wind_dir > 180 and TNB.TNB_north <50:
+            polynya_event[0,t.year-2015,t.month-1] +=1
+        # elif wind.windspeed >= 25 and wind.wind_dir > 180 and TNB.TNB_north <50:
+        #     polynya_event[0,t.year-2015,t.month-1] +=1
+        if wind.windspeed >= 25 and wind.wind_dir > 180 and TNB.TNB_south <50:
+            polynya_event[1,t.year-2015,t.month-1] +=1
+        if wind.windspeed >= 25 and wind.wind_dir > 180 and TNB.TNB_large<50:
+            polynya_event[2,t.year-2015,t.month-1] +=1
+        if wind.windspeed >= 25 and wind.wind_dir > 180 and TNB.TNB_small<50:
+            polynya_event[3,t.year-2015,t.month-1] +=1
+
+
+
+Months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+
+number_polynya = xr.Dataset(
+    {
+        "north": (["year","Month"], polynya_event[0] ),
+        "south": (["year","Month"], polynya_event[1] ),
+        "total_large": (["year","Month"], polynya_event[2] ),
+        "total_small": (["year","Month"], polynya_event[3] ),
+        "katabatic": (["year","Month"], polynya_event[4] ),
+    },
+    coords={
+        "Month": Months, # pd.date_range(datetime(2015,1,1),datetime(2015,12,1), 12),
+        "year":  pd.date_range(datetime(2015,1,1),datetime(2025,1,1), 10),
+        
+    },
+    attrs = {'description': 'Number of polynya events per month'}
+)
+
+number_polynya["north"].attrs = {"title":"North","units": "# of polynya days", "description": "North area open"}
+number_polynya["south"].attrs = {"title":"South","units": "# of polynya days", "description": "South area open"}
+number_polynya["total_small"].attrs = {"title":"Area TNB polynya close to coast","units": "# of polynya days", "description": "Total polynya area open"}
+number_polynya["total_large"].attrs = {"title":"Area total TNB polynya","units": "# of polynya days", "description": "Total polynya area open"}
+number_polynya["katabatic"].attrs = {"title":"Total area","units": "# of polynya days", "description": "Total polynya area open"}
+
+number_polynya.to_netcdf(data_path + 'Number_polynya_days.nc')
+
+
+
+#%%
+
+number_polynya = xr.open_dataset(data_path + 'Number_polynya_days.nc')
+
+levels = np.arange(0,22.5,1)
+number_polynya = number_polynya.sel(Month = number_polynya.Month[2:11])
+
+fig, ax = plt.subplots(2,2, figsize = (13,11))
+cmap = 'rainbow'
+
+number_polynya.north.plot(levels = levels , ax = ax[0][0], cmap = cmap)
+ax[0][0].set_title('North Polynya')
+number_polynya.south.plot(levels = levels , ax = ax[0][1], cmap = cmap)
+ax[0][1].set_title('South Polynya')
+number_polynya.total_small.plot(levels = levels , ax = ax[1][0], cmap = cmap)
+ax[1][0].set_title('Total Polynya')
+number_polynya.katabatic.plot(levels = levels , ax = ax[1][1], cmap = cmap)
+ax[1][1].set_title('Katabatic')
+plt.suptitle('Polynya events in Terra Nova Bay', fontsize = 22)
+
+plt.savefig(figure_path + 'polynya/Number_events.png',bbox_inches='tight')
+
+#%%
+
+"""
+
+Plot for polynya events per year
+
+"""
+
+plt.figure(figsize = (8,3))
+plt.plot(number_polynya.year,number_polynya.sum(dim = 'Month').north, label = 'North')
+plt.plot(number_polynya.year,number_polynya.sum(dim = 'Month').south, label = 'South')
+plt.plot(number_polynya.year,number_polynya.sum(dim = 'Month').total_small, label = 'Total')
+plt.plot(number_polynya.year,number_polynya.sum(dim = 'Month').katabatic, label = 'Katabatic')
+plt.xlim(number_polynya.year[0],number_polynya.year[-2])
+# plt.ylim(25,65)
+plt.legend()
+plt.savefig(figure_path + 'polynya/Number_events_per_year.png',bbox_inches='tight')
+
+
+
+
+
+#%% Polynya figures with currents
+"""
+
+Polynya figures with currents
+
+
+"""
+
+
+pol_North = []
+pol_South = []
+pol_TNB = []
+
+
+daterange = pd.date_range('2014-12-01','2022-3-15', freq = 'd')
+for t in daterange:
+    wind = MW_days.sel(time = t)
+    TNB_sic = TNB_SIC.sel(time = t)
+    North = False
+    South = False
+    TNB = False
+    figs = False
+    if wind.windspeed >= 25 and wind.wind_dir > 180 and TNB_sic.TNB_north <50:
+        pol_North.append(t)
+        North = True
+        figs = True
+    if wind.windspeed >= 25 and wind.wind_dir > 180 and TNB_sic.TNB_south <50:
+        pol_South.append(t)
+        South = True
+        figs = True
+    if wind.windspeed >= 25 and wind.wind_dir > 180 and TNB_sic.TNB_small <50:
+        pol_TNB.append(t)
+        TNB = True
+        figs = True
+       
+    if t > datetime(2022,3,15):
+        print('pass', t)    
+        pass
+    elif t.month >=3 and t.month <=11 and figs == True:
+        save = ''
+        
+        fig = plt.figure(figsize = (22,22),)
+        
+        plt.subplots_adjust(hspace=0.4)
+        gs = fig.add_gridspec(18, 13) #y,x
+        
+        ax = fig.add_subplot(gs[10:, :5], projection=ccrs.SouthPolarStereo(180)) #RS
+        ax1 = fig.add_subplot(gs[7:14, 6:])   # top
+        ax4 = fig.add_subplot(gs[14:,6:])   #bottom
+        ax3 = fig.add_subplot(gs[7:10, 1:4])  # manuela
+        axq1 = fig.add_subplot(gs[:2, :])  #velocity quiver
+        axq2 = fig.add_subplot(gs[2:4, :])  #velocity quiver
+        axq3 = fig.add_subplot(gs[4:6, :])  #velocity quiver
+        
+        ax5 = ax4.twinx()  # bottom
+        ax.set_extent((163.4, 166., -74.5 , -75.6), crs=ccrs.PlateCarree())
+        
+        gl = ax.gridlines(crs=ccrs.PlateCarree(), linewidth=1, color='black', alpha=0.5, linestyle='--', draw_labels=True)
+        gl.top_labels = False
+        gl.left_labels = True
+        gl.right_labels=False
+        gl.xlines = True
+        gl.xlabel_style = {'color': 'black', 'size': 15}
+        gl.ylabel_style = {'color': 'black', 'size': 15}
+        
+        
+        im = ax.contourf(RS.Longitude,RS.Latitude,RS.SeaIceConcentration.sel(time = t), \
+                         cmap = 'Greys_r', levels = np.arange(0,101,10), transform = ccrs.PlateCarree(), alpha = .7)
+        if South:
+            south = 38
+            north = 28
+            west = 60
+            east = 48
+            SIC = RS.SeaIceConcentration.sel(time = t)[north:south,east:west]
+            im = ax.contourf(RS.Longitude[north:south,east:west],RS.Latitude[north:south,east:west],SIC,\
+                             cmap = 'PuBu_r', levels = np.arange(0,101,10), transform = ccrs.PlateCarree())
+            fig.text(.1,.11, 'South', fontsize=22, c = 'Black', rotation = 90)
+            save  +='_South'
+        if North:
+            south = 28
+            north = 14
+            west = 60
+            east = 50
+            SIC = RS.SeaIceConcentration.sel(time = t)[north:south,east:west]
+            im = ax.contourf(RS.Longitude[north:south,east:west],RS.Latitude[north:south,east:west],SIC,\
+                             cmap = 'PuBu_r', levels = np.arange(0,101,10), transform = ccrs.PlateCarree())
+            fig.text(.1,.22, 'North', fontsize=22, c = 'Black', rotation = 90)
+            save  +='_North'
+        if TNB:
+            south = 38
+            north = 12
+            west = 60
+            east = 50
+            SIC = RS.SeaIceConcentration.sel(time = t)[north:south,east:west]
+            im = ax.contourf(RS.Longitude[north:south,east:west],RS.Latitude[north:south,east:west],SIC,\
+                             cmap = 'PuBu_r', levels = np.arange(0,101,10), transform = ccrs.PlateCarree())
+            fig.text(.1,.33, 'TNB', fontsize=22, c = 'Black', rotation = 90)
+            save  +='_TNB'
+            
+        ax.scatter([164.7495167],[-75.3602000], transform = ccrs.PlateCarree(),marker ="^", c = 'white', s = 100, edgecolors = 'black') #DITN
+        ax.scatter([164.0673],[-75.2757], transform = ccrs.PlateCarree(), marker ="^",c = 'white', s = 100,edgecolors = 'black') #DITD
+        ax.scatter([163.17435],[-75.4884167], transform = ccrs.PlateCarree(), marker ="^",c = 'white', s = 100,edgecolors = 'black') #DITS
+        ax.scatter([163.687],[-74.9460], transform = ccrs.PlateCarree(), marker ="X", c = 'tab:red', s = 100,edgecolors = 'black') #manuela
+        cbar = plt.colorbar(im)
+        cbar.set_label( label = 'Sea Ice Concentration',fontsize = 15)
+        
+        ax.stock_img(alpha = .5)
+        ax2 = ax1.twinx()
+        
+        ####### QUIVERS ################
+        
+        if t < datetime(2017,2,9):
+            rcm = ds.sel(depth = [74,274,672])
+            
+            u = (np.sin(rcm.dirt*np.pi/180)*rcm.spe).sel(time = slice(t , t + timedelta(days = 5)))
+            v = (np.cos(rcm.dirt*np.pi/180)*rcm.spe).sel(time = slice(t , t + timedelta(days = 5)))
+            
+            axq1.quiver(u.time, np.zeros_like(u.time.shape), u.sel(depth = 74),\
+                v.sel(depth = 74), angles='uv', scale_units='xy',color='black', width = 0.0005)
+            axq2.quiver(u.time, np.zeros_like(u.time.shape), u.sel(depth = 274),\
+                v.sel(depth = 274), angles='uv', scale_units='xy',color='black', width = 0.0005)
+            axq3.quiver(u.time, np.zeros_like(u.time.shape), u.sel(depth = 672),\
+                v.sel(depth = 672), angles='uv', scale_units='xy',color='black', width = 0.0005)
+            
+        else:
+            axq1.quiver(ds.time.sel(time = slice(t , t + timedelta(days = 5))), np.zeros_like(ds.time.shape), ds.u.sel(depth = 76,time = slice(t , t + timedelta(days = 5))),\
+                ds.v.sel(depth = 76,time = slice(t , t + timedelta(days = 5))), angles='uv', scale_units='xy',color='black', width = 0.0005)
+            axq2.quiver(ds.time.sel(time = slice(t , t + timedelta(days = 5))), np.zeros_like(ds.time.shape), ds.u.sel(depth = 265,time = slice(t , t + timedelta(days = 5))), \
+                ds.v.sel(depth = 265,time = slice(t , t + timedelta(days = 5))), angles='uv', scale_units='xy',  color='black', width = 0.0005)
+            axq3.quiver(ds.time.sel(time = slice(t , t + timedelta(days = 5))), np.zeros_like(ds.time.shape), ds.u.sel(depth = 670,time = slice(t , t + timedelta(days = 5))), \
+                ds.v.sel(depth = 670,time = slice(t , t + timedelta(days = 5))), angles='uv', scale_units='xy',   color='black', width = 0.0005)
+            
+        
+        ds.SA.sel(depth = 75,time = slice(t , t + timedelta(days = 5))).plot(ax = ax2, c = 'darkblue', alpha = 0.3, label = '75m')
+        ds.CT.sel(depth = 75,time = slice(t , t + timedelta(days = 5))).plot(ax = ax1,c = 'darkgreen', alpha = 0.3, label = '75m')
+        ds.T.sel(depth =115,time = slice(t , t + timedelta(days = 5))).plot(ax = ax1, c = 'olivedrab', alpha = 0.3, label = '115m')
+        ds.T.sel(depth =155,time = slice(t , t + timedelta(days = 5))).plot(ax = ax1,  c = 'olivedrab', alpha = 0.4, label = '155m')
+        ds.T.sel(depth =155,time = slice(t , t + timedelta(days = 5))).plot(ax = ax1, c = 'olivedrab', alpha = 0.4, label = '155m')
+        ds.T.sel(depth =195,time = slice(t , t + timedelta(days = 5))).plot(ax = ax1, c = 'olivedrab', alpha = 0.5, label = '195m')
+        ds.T.sel(depth =235,time = slice(t , t + timedelta(days = 5))).plot(ax = ax1,c = 'olivedrab', alpha = 0.6, label = '235m' )
+        ds.SA.sel(depth =275,time = slice(t , t + timedelta(days = 5))).plot(ax = ax2,  c = 'darkblue', alpha = 0.7, label = '275m')
+        ds.CT.sel(depth =275,time = slice(t , t + timedelta(days = 5))).plot(ax = ax4,  c = 'darkgreen', alpha = 0.7, label = '275m')
+        ds.SA.sel(depth = 668,time = slice(t , t + timedelta(days = 5))).plot(ax = ax5,  c = 'darkblue', alpha = 1, label = '668m')
+        ds.CT.sel(depth = 668,time = slice(t , t + timedelta(days = 5))).plot(ax = ax4, c = 'darkgreen', alpha = 1, label = '668m')
+        
+        
+        ax1.axvline(t + timedelta(days = 1), c = 'black',alpha = 0.3)
+        ax4.axvline(t + timedelta(days = 1), c = 'black',alpha = 0.3)
+        
+        ax1.set_xlim(t,t + timedelta(days = 5))
+        ax4.set_xlim(t,t + timedelta(days = 5))
+        
+        
+        ax1.set_ylabel('Con. Temperature [$\degree$C]', c = 'darkgreen')
+        ax1.set_xlabel(' ')
+        ax1.tick_params(axis='y', colors='darkgreen')
+        ax2.set_ylabel('Abs. Salinity [g/kg]', c = 'darkblue')
+        
+        ax2.tick_params(axis='y', colors='darkblue')
+        ax5.tick_params(axis='y', colors='darkblue')
+        ax5.set_ylabel('Abs. Salinity [g/kg]', c = 'darkblue')
+        
+        ax4.set_ylabel('Con. Temperature [$\degree$C]', c = 'darkgreen')
+        ax4.tick_params(axis='y', colors='darkgreen')
+        ax1.set_title('  ')
+        ax2.set_title('  ')
+        
+        
+        ax1.legend(bbox_to_anchor=(1.28, 1.05+1.05),title = 'C. Temperature',frameon=False)
+        ax4.legend(bbox_to_anchor=(1.265, 1.49+1.005),frameon=False)
+        
+        ax2.legend(bbox_to_anchor=(1.27, .4+1.22), title = 'A. Salinity',frameon=False)
+        ax5.legend(bbox_to_anchor=(1.27, 1.19+1.08),frameon=False)
+        
+        ax1.set_ylabel('cons. Temperature [$\degree$C]',fontsize = 15)
+        ax4.set_ylabel('cons. Temperature [$\degree$C]',fontsize = 15)
+        ax2.set_ylabel(' Absolute Salinity [g/kg]',fontsize = 15)
+        ax5.set_ylabel('Absolute Salinity [g/kg]',fontsize = 15)
+        
+        ax.set_title('  ')
+        ax3.set_title('  ')
+        ax4.set_title('  ')
+        ax5.set_title('  ')
+        axq1.set_title(' west - east  ',fontsize = 22)
+        axq2.set_title('  ')
+        axq3.set_title('  ')
+ 
+        fig.text(.95,.87,'TNB SIC', fontsize=15)
+        fig.text(.95,.87-.01, np.round(np.nanmean(SIC),2) , fontsize=15, c = 'Grey', alpha = .7 )
+        
+        fig.text(.91,.83, 'top  ', fontsize=18, c = 'Grey', rotation = 90)
+        fig.text(.91,.75, 'mid  ', fontsize=18, c = 'Grey', rotation = 90)
+        fig.text(.91,.65, 'bottom', fontsize=18, c = 'Grey', rotation = 90)
+
+        wind = MW_days.sel(time = slice(t , t + timedelta(days = 5)))
+        ax3.bar(np.arange(6),wind.windspeed)
+        ax3.set_ylabel('windspeed [m/s]', fontsize = 15)
+        ax3.scatter(0,0, c = 'white', alpha = 0)
+        ax3.scatter(0,30, c = 'white', alpha = 0)
+        ax3.set_xticks(np.arange(6))
+        #labels 
+        
+        axq1.set_xticklabels([' ',' ',' ',' ',' ',' '], fontsize=12)
+        axq2.set_xticklabels([' ',' ',' ',' ',' ',' '], fontsize=12)
+        axq1.set_yticklabels([' ',' ',' ',' ',' ',' '], fontsize=12)
+        axq2.set_yticklabels([' ',' ',' ',' ',' ',' '], fontsize=12)
+        axq3.set_yticklabels([' ',' ',' ',' ',' ',' '], fontsize=12)
+        # axq3.set_xticklabels( fontsize=15)
+        axq2.set_ylabel(' south - north ',fontsize = 25)
+        ax4.set_xlabel('  ',fontsize = 25)
+        ax1.tick_params(axis='y', which='major', labelsize=15)
+        ax2.tick_params(axis='y', which='major', labelsize=15)
+        ax1.tick_params(axis='y', which='major', labelsize=15)
+        
+        ax4.tick_params(axis='both', which='major', labelsize=15)
+        ax5.tick_params(axis='y', which='major', labelsize=15)
+        # ax6.tick_params(axis='y', which='major', labelsize=15)
+        # ax7.tick_params(axis='y', which='major', labelsize=15)
+        axq1.tick_params(axis='y', which='major', labelsize=22)
+        axq2.tick_params(axis='y', which='major', labelsize=22)
+        axq3.tick_params(axis='both', which='major', labelsize=22)
+        
+        ax3.set_xticklabels([' ',' ',' ',' ',' ',' '], fontsize=12)
+        ax3.text(-0.3,-2.2,t.strftime('%d '), fontsize=12)
+        ax3.text(0.7,-2.2,(t + timedelta(days = 1)).strftime('%d '), fontsize=12)
+        ax3.text(1.7,-2.2,(t + timedelta(days = 2)).strftime('%d '), fontsize=12)
+        ax3.text(2.7,-2.2,(t + timedelta(days = 3)).strftime('%d'), fontsize=12)
+        ax3.text(3.7,-2.2,(t + timedelta(days = 4)).strftime('%d'), fontsize=12)
+        ax3.text(4.7,-2.2,(t + timedelta(days = 5)).strftime('%d'), fontsize=12)
+        
+        
+        ax.set_title(t.strftime('%d %b %Y '), fontsize = 22)
+        
+        plt.savefig(figure_path + 'polynya/Polynya_small/'+ t.strftime('%Y-%m-%d ')+save+'.png',bbox_inches='tight')
+        # plt.show()
+        plt.close('all')
+
+
+#% Polynya windrose figures  currents
+"""
+
+Polynya windrose figures of currents
+
+
+"""
+pol_North = []
+pol_South = []
+pol_TNB = []
+
+
+ds = DITN
+
+Ss = np.arange(32,36,0.01)
+Freezing_line = gsw.t_freezing(Ss,np.zeros(len(Ss)),np.zeros(len(Ss)))
+Ct = np.arange(-2.1,0,0.01)
+
+daterange = pd.date_range('2014-12-01','2022-3-15', freq = 'd')
+i = 0
+
+for t in daterange:
+   
+    wind = MW_days.sel(time = t)
+    TNB_sic = TNB_SIC.sel(time = t)
+    North = False
+    South = False
+    TNB = False
+    figs = False
+    save = ' '
+    if wind.windspeed >= 25 and wind.wind_dir > 180 and TNB_sic.TNB_north <50:
+        pol_North.append(t)
+        North = True
+        figs = True
+    if wind.windspeed >= 25 and wind.wind_dir > 180 and TNB_sic.TNB_south <50:
+        pol_South.append(t)
+        South = True
+        figs = True
+    if wind.windspeed >= 25 and wind.wind_dir > 180 and TNB_sic.TNB_small <50:
+        pol_TNB.append(t)
+        TNB = True
+        figs = True
+      
+    
+    if t > datetime(2020,7,15):
+        print('pass', t)    
+        break
+    elif t.month >=3 and t.month <=11 and figs == True:
+        # print(t.strftime('%Y-%m-%d ') )
+        if t < datetime(2017,2,9):
+            depths = [74,274,672]
+        else:
+            depths = [76,265,670]
+        # i+=1
+        fig = plt.figure(figsize = (15,17),)
+        # plt.subplots_adjust(hspace=1)
+        gs = fig.add_gridspec(12, 22) #y,x
+        
+        ax1 = fig.add_subplot(gs[:4, :5],projection="windrose") 
+        ax2 =  fig.add_subplot(gs[4:8, :5],projection="windrose")
+        ax3 = fig.add_subplot(gs[8:, :5],projection="windrose") 
+        
+        ax4 = fig.add_subplot(gs[:4, 6:11],projection="windrose")
+        ax5 = fig.add_subplot(gs[4:8,6:11],projection="windrose")
+        ax6 = fig.add_subplot(gs[8:, 6:11],projection="windrose")
+        
+        ax7 = fig.add_subplot(gs[:3, 15:]) 
+        ax8 = fig.add_subplot(gs[4:7, 15:]) 
+        ax9 = fig.add_subplot(gs[8:11, 15:])  
+    
+        
+        theta_p = ds.dirt.sel(time = slice (t,t + timedelta(days = 5)))
+        speed_p = ds.spe.sel(time = slice (t,t + timedelta(days = 5)))
+        
+        theta_m = ds.dirt.sel(time = slice (datetime(t.year,t.month,1),\
+                                               datetime(t.year,t.month,1) + timedelta(days = 30)))
+        speed_m = ds.spe.sel(time = slice (datetime(t.year,t.month,1),\
+                                               datetime(t.year,t.month,1) + timedelta(days = 30)))
+        
+        try:
+
+            max_surf = float(np.nanmax(speed_m.sel(depth = depths[0])))
+            max_mid = float(np.nanmax(speed_m.sel(depth = depths[1])))
+            max_bot = float(np.nanmax(speed_m.sel(depth = depths[2])))
+            
+            bin_surf = np.arange(0,max_surf,5)
+            bin_mid = np.arange(0,max_mid,5)
+            bin_bot = np.arange(0,max_bot,5)
+        except:
+            c = 0
+        
+        try:
+            # polynya 
+            ax1.bar(theta_p.sel(depth = depths[0]).dropna(dim = 'time').values,speed_p.sel(depth = depths[0]).dropna(dim = 'time').values, normed=True, bins = bin_surf)
+            ax2.bar(theta_p.sel(depth = depths[1]).dropna(dim = 'time').values,speed_p.sel(depth = depths[1]).dropna(dim = 'time').values, normed=True, bins = bin_mid)
+            ax3.bar(theta_p.sel(depth = depths[2]).dropna(dim = 'time').values,speed_p.sel(depth = depths[2]).dropna(dim = 'time').values, normed=True, bins = bin_bot)
+        except:
+           c = 0     
+        try:  
+            # monthly currents
+            ax4.bar(theta_m.sel(depth = depths[0]).dropna(dim = 'time').values,speed_m.sel(depth = depths[0]).dropna(dim = 'time').values, normed=True, bins = bin_surf)
+            ax5.bar(theta_m.sel(depth = depths[1]).dropna(dim = 'time').values,speed_m.sel(depth = depths[1]).dropna(dim = 'time').values, normed=True, bins = bin_mid)
+            ax6.bar(theta_m.sel(depth = depths[2]).dropna(dim = 'time').values,speed_m.sel(depth = depths[2]).dropna(dim = 'time').values, normed=True, bins = bin_bot)
+        except:
+           c = 0
+        try: 
+            ax4.legend(bbox_to_anchor=(1.05, 0), title = 'velocity [cm/s]')
+            ax5.legend(bbox_to_anchor=(1.05, 0), title = 'velocity [cm/s]')
+            ax6.legend(bbox_to_anchor=(1.05, 0), title = 'velocity [cm/s]')
+        except:
+            c = 0
+        
+        # plt.scatter(deep.SA,deep.CT,marker='^', label = 'deep')
+        TS = ds.sel(time = slice (t,t + timedelta(days = 5)), depth = [75,275,668])
+        
+        TS1 = ax7.scatter(TS.sel(depth = 75).SA,TS.sel(depth = 75).CT, c = np.arange(len(TS.time))/24)
+        plt.colorbar(TS1, label = 'days since polynya event')
+        TS2 = ax8.scatter(TS.sel(depth = 275).SA,TS.sel(depth = 275).CT, c = np.arange(len(TS.time))/24)
+        plt.colorbar(TS2, label = 'days since polynya event')
+        TS3 = ax9.scatter(TS.sel(depth = 668).SA,TS.sel(depth = 668).CT, c = np.arange(len(TS.time))/24)
+        plt.colorbar(TS3, label = 'days since polynya event')
+        
+        if TS.SA.min() >30 and TS.CT.min()>-3:
+            ax7.set_xlim(TS.SA.min()-abs(0.005*TS.SA.min()),TS.SA.max()+abs(0.005*TS.SA.max()))
+            ax8.set_xlim(TS.SA.min()-abs(0.005*TS.SA.min()),TS.SA.max()+abs(0.005*TS.SA.max()))
+            ax9.set_xlim(TS.SA.min()-abs(0.005*TS.SA.min()),TS.SA.max()+abs(0.005*TS.SA.max()))
+            
+            ax7.set_ylim(TS.CT.min()-abs(0.01*TS.CT.min()),TS.CT.max()+abs(0.01*TS.CT.max()))
+            ax8.set_ylim(TS.CT.min()-abs(0.01*TS.CT.min()),TS.CT.max()+abs(0.01*TS.CT.max()))
+            ax9.set_ylim(TS.CT.min()-abs(0.01*TS.CT.min()),TS.CT.max()+abs(0.01*TS.CT.max()))
+        
+        
+       
+        ax7.plot(Ss,Freezing_line, '--', c = 'tab:grey')
+        ax8.plot(Ss,Freezing_line, '--', c = 'tab:grey')
+        ax9.plot(Ss,Freezing_line, '--', c = 'tab:grey')
+        
+        ax1.set_title('Polynya event', fontsize = 22)
+        ax4.set_title('Total month', fontsize = 22)
+        ax7.set_title('T-S', fontsize = 22)
+
+        
+        
+        title = str(t.day) + '-' + str(t.month) + '-' + str(t.year)
+        
+        fig.text(.075,.7,'subsurface',rotation = 90,fontsize = 22)
+        fig.text(.075,.4,'mid water column',rotation = 90,fontsize = 22)
+        fig.text(.075,.2,'bottom',rotation = 90,fontsize = 22)
+        
+               
+        ts1 = ax7.add_patch(matplotlib.patches.Rectangle((34.75,-2), 35.1 - 34.55, 2-1.91,\
+                                                   color="grey", alpha = .5))
+        ts2 = ax8.add_patch(matplotlib.patches.Rectangle((34.75,-2), 35.1 - 34.55, 2-1.91,\
+                                                   color="grey", alpha = .5))
+        ts3 = ax9.add_patch(matplotlib.patches.Rectangle((34.75,-2), 35.1 - 34.55, 2-1.91,\
+                                                   color="grey", alpha = .5))
+
+        
+        
+        
+        if South:
+            save  +='_South'
+            title += ' South'
+        if North:
+            save  +='_North'
+            title += ' North'
+        if TNB:
+            save  +='_TNB'
+            title += ' '
+            
+        fig.text(.22,.91,title ,fontsize = 33)
+        try:
+            plt.savefig(figure_path+'polynya/Polynya_small/'+ t.strftime('%Y-%m-%d ')+save+'_windrose.png',bbox_inches='tight')
+            # plt.show()
+        except:
+            # plt.show()
+            print(t.strftime('%Y-%m-%d ') + '  not saved')
+        plt.close('all')
