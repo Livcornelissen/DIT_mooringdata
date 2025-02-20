@@ -1,0 +1,170 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Nov 27 19:25:59 2024
+
+@author: cornelissenl
+
+
+
+
+Open Polynya
+
+
+"""
+
+
+import pandas as pd
+import numpy as np
+
+import gsw
+
+from netCDF4 import Dataset  
+
+import matplotlib.pyplot as plt
+import xarray as xr
+from shapely.geometry import LineString
+from glob import glob
+from datetime import datetime
+
+import os
+
+import random
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib as mpl
+import cmocean
+from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
+import matplotlib.ticker as mticker
+import matplotlib.patheffects as pe
+from matplotlib.colors import LogNorm
+
+from datetime import date, timedelta
+
+
+figure_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/figures/'
+
+
+
+comp = '/Users/cornelissenl/'
+
+ 
+ 
+figure_path = comp +'OneDrive - NIWA/PhD/figures/'
+data_path = comp +'OneDrive - NIWA/PhD/data/'
+data_in= comp +'OneDrive - NIWA/PhD/data/SEANOE/'
+code_path = comp +'OneDrive - NIWA/PhD/Coding/'
+ds_path = comp +'OneDrive - NIWA/PhD/Data/calibrated/'
+
+
+DTIN = xr.open_dataset(data_in + 'DITN_mooring.nc')
+
+RS = xr.open_dataset(data_path + 'artist/SIC_Artist.nc')
+
+colors = ['tab:blue','tab:green','tab:orange','tab:purple','tab:gray',\
+          'tab:pink','tab:red','tab:cyan','tab:olive']
+months = ['zero','January','February','March','April','May','June','July','August','September','October','November','December']
+doy = np.cumsum([0,31,28,31,30,31,30,31,31,30,31,30])
+
+#%%
+
+# TNB = SIC[north:south,east:west]
+
+
+SIC = RS.SeaIceConcentration
+south = 38
+north = 14
+west = 60
+east = 42
+TNB = RS.SeaIceConcentration[:,north:south,east:west]
+lon = RS.Longitude
+lat = RS.Latitude
+
+
+south = 38
+north = 14
+west = 60
+east = 42
+TNB_large = RS.SeaIceConcentration[:,north:south,east:west].mean(axis = (1,2))
+# [north,south,east,west]
+
+south = 38
+north = 12
+west = 60
+east = 50
+TNB_small = RS.SeaIceConcentration[:,north:south,east:west].mean(axis = (1,2))
+
+
+
+south = 38
+north = 14
+west = 60
+east = 42
+# Select all pixels with SIC < 50%. 
+# Calculate the area by calculate the area of open water in % * 9.765625 (the size of a grid cell in km2)
+dA = 9.765625
+TNB_pol = TNB  #.where(TNB<50)
+open_area =((0.01*(100-TNB_pol))*dA).sum(axis = (1,2))
+SIC_area = ((0.01*(TNB_pol))*dA).sum(axis = (1,2))
+
+
+south = 28
+north = 14
+west = 60
+east = 50
+TNB_north = RS.SeaIceConcentration[:,north:south,east:west].mean(axis = (1,2))
+
+south = 38
+north = 28
+west = 60
+east = 48
+TNB_south = RS.SeaIceConcentration[:,north:south,east:west].mean(axis = (1,2))
+
+
+
+
+ds = xr.Dataset(    {
+        "TNB_north": TNB_north,
+        "TNB_south": TNB_south,
+        "TNB_large": TNB_large,
+        "TNB_small": TNB_small,
+        "open_area" : TNB_area,
+        "SIC_area" : SIC_area,
+        
+    }, attrs = {'description': 'daily SIC coverage TNB polynya'})
+
+
+ds['TNB_north'].attrs['description'] = 'TNB north area SIC'
+ds['TNB_north'].attrs['units'] = '%'
+
+ds['TNB_south'].attrs['description'] = 'TNB south area SIC'
+ds['TNB_south'].attrs['units'] = '%'
+
+ds['TNB_large'].attrs['description'] = 'TNB total area SIC'
+ds['TNB_large'].attrs['units'] = '%'
+
+ds['TNB_small'].attrs['description'] = 'TNB total area SIC'
+ds['TNB_small'].attrs['units'] = '%'
+
+ds['open_area'].attrs['description'] = 'Area of open water' # '<50% SIC'
+ds['open_area'].attrs['units'] = 'km$^2$'
+
+ds['SIC_area'].attrs['description'] = 'Area of Sea ice coverage' # '<50% SIC'
+ds['SIC_area'].attrs['units'] = 'km$^2$'
+
+
+ds.to_netcdf(data_path + 'output/TNB_SIC.nc')
+
+
+
+
+#%%
+ds = xr.open_dataset(data_path + 'output/TNB_SIC.nc' )
+fig = plt.figure(figsize = (11,4))
+ds.SIC_area.plot(label = 'Sea ice area', c = 'grey', linewidth = .5)
+ds.open_area.plot(label = 'Open area', c = 'tab:blue', alpha = .5, linewidth = .5)
+# plt.ylim(2000,3500)
+plt.xlim(ds.time[0],ds.time[-1])
+plt.ylabel('Area [km$^2$]')
+plt.legend()
+plt.savefig(figure_path + 'SeaIce_OpenOcean_area.png')
+
