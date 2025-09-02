@@ -1,0 +1,294 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed May 31 14:17:10 2023
+
+@author: cornelissenl
+
+
+
+data publication
+
+"""
+
+
+
+import pandas as pd
+import numpy as np
+
+import matplotlib.pyplot as plt
+import xarray as xr
+import gsw
+import os
+from glob import glob
+
+import random
+# import cartopy.crs as ccrs
+# import cartopy.feature as cfeature
+# from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
+
+import matplotlib as mpl
+import cmocean
+
+import matplotlib.ticker as mticker
+import matplotlib.patheffects as pe
+from datetime import datetime
+from matplotlib.lines import Line2D
+
+""" Windows """
+comp = '/Users/cornelissenl/'
+"""  Mac """
+# comp = '/Users/livcornelissen/Library/CloudStorage/'
+
+
+
+figure_path = comp +'OneDrive - NIWA/PhD/figures/'
+data_path = comp +'OneDrive - NIWA/PhD/Coding/Data/'
+data_csvs = comp +'OneDrive - NIWA/PhD/Coding/Data/csvs/'
+code_path = comp +'OneDrive - NIWA/PhD/Coding/'
+ds_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/data/SEANOE/'
+
+DITN = xr.open_dataset(ds_path+'DITN_mooring.nc')
+DITS = xr.open_dataset(ds_path+'DITS_mooring.nc')
+DITD = xr.open_dataset(ds_path+'DITD_mooring.nc')
+
+#%%
+
+
+def plot(DS, var, depth):
+    
+    for year in range(2014,2023):
+        if year == 2014:
+            ds = DS.sel(time = slice(datetime(year,12,12),datetime(year,12,31)))
+        else:
+            ds = DS.sel(time = slice(datetime(year,1,1),datetime(year+1,1,1)))
+        
+        days = ds.groupby('time.dayofyear').median(dim = 'time')
+        days[var].sel(depth = 75).plot(label = str(year))
+    xticks = np.cumsum([0,31,28,31,30,31,30,31,31,30,31,30])
+    xlabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+    plt.xticks(xticks,xlabels)    
+    plt.legend(loc = 'lower right')
+    plt.xlim(0,365)
+    plt.show()
+
+plot(DITN, 'SA',75)
+
+#%%
+
+
+
+#%% 3 depth plot
+
+# colors = ['tab:blue','tab:green','tab:orange','tab:purple','tab:gray',\
+          # 'tab:pink','tab:red','tab:cyan','tab:olive']
+
+years = np.arange(2014,2023)
+colors = ['tab:blue','tab:green','tab:orange','tab:purple','tab:gray',\
+          'tab:pink','tab:red','tab:cyan','tab:olive','orange','darkmagenta', 'black']
+labels = ['2014','2015','2016','2017','2018','2019','2020','2021','2022','2023','2024', 'climatology mean']
+def doy_plot(DS, var, depth,title,ylabel, units):
+    plt.close('all')
+    fig, ax = plt.subplots(nrows = len(depth), figsize = (11,len(depth)*3), sharex = True,layout='constrained' )
+    pos = 0
+    
+    for d in depth:
+        c = 0
+        for year in years:
+            if year == 2014:
+                ds = DS.sel(time = slice(datetime(year,12,12),datetime(year,12,31)))
+            else:
+                ds = DS.sel(time = slice(datetime(year,1,1),datetime(year,12,31)))
+                
+            if d == 668 and year == 2019:
+                pass
+
+            elif d == 668 and year == 2020:
+                days = ds.sel(time = slice(datetime(2020,3,20),datetime(2020,12,31))).groupby('time.dayofyear').median(dim = 'time')
+                days[var].sel(depth = d).plot(label = str(year),ax = ax[pos], c = colors[c])
+                ax[pos].set_xlabel(' ')
+                ax[pos].tick_params(axis='both', which='major', labelsize=15)
+            else: # year != 2019 and year != 2020 and d == 668:
+                days = ds.groupby('time.dayofyear').median(dim = 'time')
+                days[var].sel(depth = d).plot(label = str(year),ax = ax[pos], c = colors[c])
+                ax[pos].set_xlabel(' ')
+                ax[pos].tick_params(axis='both', which='major', labelsize=15)
+            c +=1
+        if var != 'P':
+            DS[var].sel(depth = d).groupby('time.dayofyear').median(dim = 'time').plot(ax = ax[pos], label = 'climatology', c = 'black', linewidth = 3)
+        ax[pos].set_title(f'depth = {d} m', fontsize=15) 
+        ax[pos].set_ylabel(ylabel + units, fontsize = 15)
+        
+        pos += 1
+        
+    xticks = np.cumsum([0,31,28,31,30,31,30,31,31,30,31,30])
+    xlabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+    ax[len(depth)-1].set_xticks(xticks,xlabels)    
+    # fig.legend(loc = 'lower right')
+    ax[len(depth)-1].set_xlim(0,365)
+    
+    if var =='P':
+        ax[1].set_ylim(290,269)
+        ax[0].invert_yaxis()
+        ax[2].invert_yaxis()
+    
+    lines = [Line2D([0], [0], color=c, linewidth=1.1, linestyle='-') for c in colors]   
+    
+    fig.legend(lines, labels, bbox_to_anchor=(1.01,1.0), loc='upper left', fontsize=18)
+    plt.suptitle(title, fontsize = 22)
+    plt.savefig(figure_path + 'data_publication/DITN_' + var + '.png',bbox_inches='tight')
+    plt.show()
+#%%
+
+
+doy_plot(DITN, 'S',[75,275,668], 'DITN - Practical Salinity','salinity','[psu]')
+
+doy_plot(DITN, 'T',[75,275,668], 'DITN -  Temperature','temperature','$\degree$C')
+
+doy_plot(DITN, 'P',[75,275,668], 'DITN - Pressure','pressure', '[dbar]')
+doy_plot(DITN, 'spe',[76,265,670], 'DITN - speed','speed',' [cm/s]')
+
+
+
+#%%
+
+colors = ['tab:purple','tab:gray','tab:pink','tab:red','tab:cyan','tab:olive','orange','darkmagenta']
+DS = DITD
+
+
+# fig, ax = plt.subplots( figsize = (11,3), layout='constrained' )
+
+def doy_DITD(var,title,units,d):
+    years = np.arange(2017,2025)
+    fig, ax = plt.subplots( figsize = (11,3), layout='constrained' )
+    c = 0
+    for year in years:
+        if year == 2017:
+            ds = DS.sel(time = slice(datetime(year,2,1),datetime(year,12,31)))
+        else:
+            ds = DS.sel(time = slice(datetime(year,1,1),datetime(year,12,31)))
+        # print(year)
+        days = ds.groupby('time.dayofyear').median(dim = 'time')
+        days[var].sel(depth = d).plot(label = str(year),ax = ax, c = colors[c])
+
+        c +=1
+    
+
+
+    ax.tick_params(axis='both', which='major', labelsize=15)
+    xticks = np.cumsum([0,31,28,31,30,31,30,31,31,30,31,30])
+    xlabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+    ax.set_xticks(xticks,xlabels)  
+    ax.set_title(f'depth = {d} m', fontsize=15) 
+    # fig.legend(loc = 'lower right')
+    ax.set_xlim(0,365)
+    
+    if var == 'P':
+        ax.invert_yaxis()
+    else:
+        DS[var].sel(depth = d).groupby('time.dayofyear').median(dim = 'time').plot(ax = ax, label = 'climatology', c = 'black', linewidth = 3)
+    ax.set_ylabel(f'{title} {units}', fontsize=15)
+    ax.set_xlabel(' ')
+    lines = [Line2D([0], [0], color=c, linewidth=1.1, linestyle='-') for c in colors]   
+    labels = ['2017','2018','2019','2020','2021','2022','2023','2024']
+    fig.legend(lines, labels, bbox_to_anchor=(1.01,1.0), loc='upper left', fontsize=18)
+    plt.suptitle('DITD - '+title, fontsize = 22)
+    plt.savefig(figure_path + 'data_publication/DITD_' + var + '.png',bbox_inches='tight')
+    plt.show()
+    plt.close('all')
+#%%
+
+doy_DITD('P','Pressure', ' [dbar]' ,1220)
+doy_DITD('S','Practical Salinity', ' [psu]',1220)
+doy_DITD('T','Temperature', ' [$\degree$C]',1220)
+doy_DITD('spe','speed', ' [cm/s]',1240)
+
+#%% DITS 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+
+csv_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/data/'
+files = sorted(glob(csv_path+'s*DITS*.nc'))  #+ glob(csv_path+'s1803DITS3_15257*.nc')
+thermistors = pd.read_csv(csv_path + 'instrumentlist.csv')
+spefiles = sorted(glob(csv_path + 'c*DITS*.nc'))
+
+plt.close('all')
+
+years = [2017,2018,2019,2020]
+labels = ['2017','2018','2019','2020']
+colors = ['tab:purple','tab:gray','tab:pink','tab:red']
+
+linestyle = ['-','--','-','--','-','--','-','--','-','--']
+def DITS(var, title, units):
+    fig, ax = plt.subplots( nrows = 3,figsize = (11,9), layout='constrained', sharex = True )
+    if var == 'spe':
+        files = spefiles
+    for i in range(len(files)):
+        data = xr.open_dataset(files[i])
+        depth = thermistors['depth'][np.where(thermistors['filename'] == (os.path.basename(files[i][:-3])))[0][0]]
+        
+        if depth <200:
+            pos = 0
+        elif depth<400: 
+            pos = 1
+        else:
+            pos = 2
+        for c in range(len(years)):
+            
+            ds = data.sel(DateTime = slice(datetime(years[c],1,1),datetime(years[c],12,31)))
+            
+            try:
+                
+                days = ds.groupby('DateTime.dayofyear').median(dim = 'DateTime')
+                
+                days[var].plot(ax = ax[pos], c = colors[c], label = str(depth),linestyle = linestyle[i])
+            except:
+                pass
+            
+            ax[pos].set_xlabel(' ')
+            ax[pos].set_ylabel(title + units, fontsize = 15)
+            ax[pos].tick_params(axis='both', which='major', labelsize=15)
+            ax[pos].set_title(f'depth = {depth} m', fontsize=15) 
+        
+        
+        xticks = np.cumsum([0,31,28,31,30,31,30,31,31,30,31,30])
+        xlabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+        ax[2].set_xticks(xticks,xlabels)    
+    
+        ax[2].set_xlim(0,365)
+        
+        
+        ax[0].legend(title = 'depth', loc = 'lower right')
+        ax[1].legend(title = 'depth', loc = 'lower right')
+        ax[2].legend(title = 'depth', loc = 'lower right')
+    if var == 'P':
+        for x in range(3):
+            ax[x].invert_yaxis()
+    lines = [Line2D([0], [0], color=c, linewidth=1.1, linestyle='-') for c in colors]   
+    labels = ['2017','2018','2019','2020','2021','2022']
+    fig.legend(lines, labels, bbox_to_anchor=(1.01,1.0), loc='upper left', fontsize=18)
+    plt.suptitle('DITS - '+title, fontsize = 22)
+    plt.savefig(figure_path + 'data_publication/DITS_' + var + '.png',bbox_inches='tight')
+    plt.show() 
+    plt.close('all')
+#%%
+
+var = 'S'
+title = 'Salinity'
+units = '[psu]'
+DITS(var, title, units)
+
+var = 'T'
+title = 'Temperature'
+units = ' [$\degree$C]'
+DITS(var, title, units)
+
+var = 'P'
+title = 'Pressure'
+units = ' [dbar]'
+DITS(var, title, units)
+
+
+var = 'spe'
+title = 'Speed'
+units = ' [cm/s]'
+DITS(var, title, units)
