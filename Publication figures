@@ -51,6 +51,47 @@ DITN = xr.open_dataset(ds_path+'DITN_mooring.nc')
 DITS = xr.open_dataset(ds_path+'DITS_mooring.nc')
 DITD = xr.open_dataset(ds_path+'DITD_mooring.nc')
 
+
+
+# ---------- helper to compute uncertainty bands ----------
+def compute_bands(da, varname):
+    """
+    da: xarray DataArray indexed by dayofyear (1..365) or similar
+    returns (x, lower, upper) as numpy arrays suitable for ax.fill_between
+    """
+    # get x axis (dayofyear coordinate if present)
+    if 'dayofyear' in da.coords:
+        x = da['dayofyear'].values
+    else:
+        # fallback: numeric index starting at 1
+        x = np.arange(1, da.size + 1)
+
+    vals = da.values.astype(float)
+
+    if varname == 'SA':
+        lower = vals - 0.003
+        upper = vals + 0.003
+    elif varname == 'CT':
+        lower = vals - 0.002
+        upper = vals + 0.002
+    elif varname == 'P':
+        uncert = 0.001 * np.abs(vals)   # 0.1% -> 0.001 factor
+        lower = vals - uncert
+        upper = vals + uncert
+    elif varname == 'spe':
+        uncert = 0.01 * np.abs(vals) + 0.5  # ±1% ±0.5 cm/s
+        lower = vals - uncert
+        upper = vals + uncert
+    else:
+        # generic tiny band: +/- 1% (fallback)
+        uncert = 0.01 * np.abs(vals)
+        lower = vals - uncert
+        upper = vals + uncert
+
+    return x, lower, upper
+
+
+
 #%%
 
 
@@ -76,21 +117,16 @@ plot(DITN, 'SA',75)
 #%%
 
 
-
-#%% 3 depth plot
-
-# colors = ['tab:blue','tab:green','tab:orange','tab:purple','tab:gray',\
-          # 'tab:pink','tab:red','tab:cyan','tab:olive']
-
 years = np.arange(2014,2023)
-colors = ['tab:blue','tab:green','tab:orange','tab:purple','tab:gray',\
+colors = ['tab:blue','tab:green','tab:orange','tab:purple','tab:gray',
           'tab:pink','tab:red','tab:cyan','tab:olive','orange','darkmagenta', 'black']
-labels = ['2014','2015','2016','2017','2018','2019','2020','2021','2022','2023','2024', 'climatology mean']
-def doy_plot(DS, var, depth,title,ylabel, units):
+labels = ['2014','2015','2016','2017','2018','2019','2020','2021','2022','2023','2024', 'Multi-year mean']
+
+def doy_plot(DS, var, depth, title, ylabel, units):
     plt.close('all')
-    fig, ax = plt.subplots(nrows = len(depth), figsize = (11,len(depth)*3), sharex = True,layout='constrained' )
+    fig, ax = plt.subplots(nrows = len(depth), figsize = (11,len(depth)*3), sharex = True, layout='constrained')
     pos = 0
-    
+
     for d in depth:
         c = 0
         for year in years:
@@ -98,111 +134,449 @@ def doy_plot(DS, var, depth,title,ylabel, units):
                 ds = DS.sel(time = slice(datetime(year,12,12),datetime(year,12,31)))
             else:
                 ds = DS.sel(time = slice(datetime(year,1,1),datetime(year,12,31)))
-                
+
             if d == 668 and year == 2019:
                 pass
 
             elif d == 668 and year == 2020:
                 days = ds.sel(time = slice(datetime(2020,3,20),datetime(2020,12,31))).groupby('time.dayofyear').median(dim = 'time')
-                days[var].sel(depth = d).plot(label = str(year),ax = ax[pos], c = colors[c])
-                ax[pos].set_xlabel(' ')
-                ax[pos].tick_params(axis='both', which='major', labelsize=15)
-            else: # year != 2019 and year != 2020 and d == 668:
+            else:
                 days = ds.groupby('time.dayofyear').median(dim = 'time')
-                days[var].sel(depth = d).plot(label = str(year),ax = ax[pos], c = colors[c])
-                ax[pos].set_xlabel(' ')
-                ax[pos].tick_params(axis='both', which='major', labelsize=15)
-            c +=1
+
+            # median line
+            median = days[var].sel(depth = d)
+            median.plot(label = str(year), ax = ax[pos], c = colors[c])
+
+            # compute uncertainty bands depending on variable and plot shaded region
+            x = np.arange(1, len(median['dayofyear'].values)+1)
+
+            if var == 'SA':  # salinity, asymmetric bounds provided by you: lower=0.003, upper=0.01
+                lower = median - 0.01
+                upper = median + 0.01
+                ax[pos].fill_between(x, lower, upper, alpha=0.15, color=colors[c])
+            elif var == 'CT':  # conserved temperature, SBE temperature accuracy ±0.002 °C
+                lower = median - 0.002
+                upper = median + 0.002
+                ax[pos].fill_between(x, lower, upper, alpha=0.15, color=colors[c])
+            elif var == 'P':  # pressure, use ±0.1% of measured value (proxy for ±0.1% full scale)
+                # ensure non-negative and handle NaNs
+                uncert = 0.001 * np.abs(median)
+                lower = median - uncert
+                upper = median + uncert
+                ax[pos].fill_between(x, lower, upper, alpha=0.15, color=colors[c])
+            elif var == 'spe':  # speed, AQD/Aquadopp spec: ±1% of measured value ±0.5 cm/s
+                # convert to numpy arrays to compute
+                median_vals = median.values.astype(float)
+                uncert = 0.01 * np.abs(median_vals) + 0.5  # same units as median (cm/s)
+                lower = median_vals - uncert
+                upper = median_vals + uncert
+                # convert back to xarray-like if needed — for plotting with fill_between we pass numpy arrays
+                ax[pos].fill_between(x, lower, upper, alpha=0.15, color=colors[c])
+            else:
+                # for other variables do nothing (or add a generic small band)
+                pass
+
+            ax[pos].set_xlabel(' ')
+            ax[pos].tick_params(axis='both', which='major', labelsize=15)
+            c += 1
+
+        # add climatology median and its band
         if var != 'P':
-            DS[var].sel(depth = d).groupby('time.dayofyear').median(dim = 'time').plot(ax = ax[pos], label = 'climatology', c = 'black', linewidth = 3)
-        ax[pos].set_title(f'depth = {d} m', fontsize=15) 
+            clim = DS[var].sel(depth = d).groupby('time.dayofyear').median(dim = 'time')
+            clim.plot(ax = ax[pos], label = 'Multi-year mean', c = 'black', linewidth = 3)
+            # add climatology uncertainty band using same rules
+            x_clim = np.arange(1, len(clim['dayofyear'].values)+1)
+            if var == 'SA':
+                lower_clim = clim - 0.01
+                upper_clim = clim + 0.01
+                ax[pos].fill_between(x_clim, lower_clim, upper_clim, alpha=0.2, color='black')
+            elif var == 'CT':
+                lower_clim = clim - 0.002
+                upper_clim = clim + 0.002
+                ax[pos].fill_between(x_clim, lower_clim, upper_clim, alpha=0.2, color='black')
+            elif var == 'spe':
+                med = clim.values.astype(float)
+                uncert = 0.01 * np.abs(med) + 0.5
+                ax[pos].fill_between(x_clim, med - uncert, med + uncert, alpha=0.2, color='black')
+
+        ax[pos].set_title(f'depth = {d} m', fontsize=15)
         ax[pos].set_ylabel(ylabel + units, fontsize = 15)
-        
         pos += 1
-        
+
+    # x-axis formatting (day-of-year ticks)
     xticks = np.cumsum([0,31,28,31,30,31,30,31,31,30,31,30])
     xlabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-    ax[len(depth)-1].set_xticks(xticks,xlabels)    
-    # fig.legend(loc = 'lower right')
+    ax[len(depth)-1].set_xticks(xticks, xlabels)
     ax[len(depth)-1].set_xlim(0,365)
-    
-    if var =='P':
-        ax[1].set_ylim(290,269)
+
+    if var == 'P':
+        # invert axes if you want pressure increasing downward (your original code did some inversions)
+        if len(depth) > 1:
+            try:
+                ax[1].set_ylim(290,269)
+            except Exception:
+                pass
         ax[0].invert_yaxis()
-        ax[2].invert_yaxis()
-    
-    lines = [Line2D([0], [0], color=c, linewidth=1.1, linestyle='-') for c in colors]   
-    
+        if len(depth) > 2:
+            ax[2].invert_yaxis()
+
+    lines = [Line2D([0], [0], color=c, linewidth=1.1, linestyle='-') for c in colors]
     fig.legend(lines, labels, bbox_to_anchor=(1.01,1.0), loc='upper left', fontsize=18)
     plt.suptitle(title, fontsize = 22)
-    plt.savefig(figure_path + 'data_publication/DITN_' + var + '.png',bbox_inches='tight')
+    plt.savefig(figure_path + 'data_publication/DITN_' + var + '_uncertainty.png',bbox_inches='tight')
     plt.show()
-#%%
 
-
-doy_plot(DITN, 'S',[75,275,668], 'DITN - Practical Salinity','salinity','[psu]')
-
-doy_plot(DITN, 'T',[75,275,668], 'DITN -  Temperature','temperature','$\degree$C')
-
-doy_plot(DITN, 'P',[75,275,668], 'DITN - Pressure','pressure', '[dbar]')
-doy_plot(DITN, 'spe',[76,265,670], 'DITN - speed','speed',' [cm/s]')
-
+# then call as before
+doy_plot(DITN, 'SA',[75,275,668], 'DITN ','SA ','[g/kg]')
+# doy_plot(DITN, 'CT',[75,275,668], 'DITN ','CT ','$\degree$C')
+# doy_plot(DITN, 'P',[75,275,668], 'DITN ','Pressure ', '[dbar]')
+# doy_plot(DITN, 'spe',[76,265,670], 'DITN ','Speed ',' [cm/s]')
 
 
 #%%
 
-colors = ['tab:purple','tab:gray','tab:pink','tab:red','tab:cyan','tab:olive','orange','darkmagenta']
-DS = DITD
-
-
-# fig, ax = plt.subplots( figsize = (11,3), layout='constrained' )
-
-def doy_DITD(var,title,units,d):
+# ---------- doy_DITD with uncertainty shading ----------
+def doy_DITD(var, title, units, d):
     years = np.arange(2017,2025)
-    fig, ax = plt.subplots( figsize = (11,3), layout='constrained' )
+    fig, ax = plt.subplots(figsize=(11,3), layout='constrained')
     c = 0
     for year in years:
         if year == 2017:
-            ds = DS.sel(time = slice(datetime(year,2,1),datetime(year,12,31)))
+            ds = DITD.sel(time = slice(datetime(year,2,1),datetime(year,12,31)))
         else:
-            ds = DS.sel(time = slice(datetime(year,1,1),datetime(year,12,31)))
-        # print(year)
+            ds = DITD.sel(time = slice(datetime(year,1,1),datetime(year,12,31)))
+
         days = ds.groupby('time.dayofyear').median(dim = 'time')
-        days[var].sel(depth = d).plot(label = str(year),ax = ax, c = colors[c])
 
-        c +=1
-    
+        # select the DataArray for plotting
+        try:
+            da = days[var].sel(depth = d)
+        except Exception:
+            # if selection fails, try without depth (e.g. instrument time-series)
+            da = days[var]
 
+        # plot the median line
+        da.plot(label = str(year), ax = ax, c = colors[c])
+
+        # compute and plot uncertainty band for this year
+        try:
+            x, lower, upper = compute_bands(da, var)
+            ax.fill_between(x, lower, upper, alpha=0.15, color=colors[c])
+        except Exception:
+            pass
+
+        c += 1
 
     ax.tick_params(axis='both', which='major', labelsize=15)
     xticks = np.cumsum([0,31,28,31,30,31,30,31,31,30,31,30])
     xlabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-    ax.set_xticks(xticks,xlabels)  
-    ax.set_title(f'depth = {d} m', fontsize=15) 
-    # fig.legend(loc = 'lower right')
+    ax.set_xticks(xticks, xlabels)
+    ax.set_title(f'depth = {d} m', fontsize=15)
     ax.set_xlim(0,365)
-    
+
     if var == 'P':
         ax.invert_yaxis()
     else:
-        DS[var].sel(depth = d).groupby('time.dayofyear').median(dim = 'time').plot(ax = ax, label = 'climatology', c = 'black', linewidth = 3)
+        # climatology median + band
+        try:
+            clim = DITD[var].sel(depth = d).groupby('time.dayofyear').median(dim = 'time')
+        except Exception:
+            clim = DITD[var].groupby('time.dayofyear').median(dim = 'time')
+
+        clim.plot(ax = ax, label = 'Multi-year mean', c = 'black', linewidth = 3)
+        try:
+            x_clim, lower_clim, upper_clim = compute_bands(clim, var)
+            ax.fill_between(x_clim, lower_clim, upper_clim, alpha=0.2, color='black')
+        except Exception:
+            pass
+
     ax.set_ylabel(f'{title} {units}', fontsize=15)
     ax.set_xlabel(' ')
-    lines = [Line2D([0], [0], color=c, linewidth=1.1, linestyle='-') for c in colors]   
-    labels = ['2017','2018','2019','2020','2021','2022','2023','2024']
-    fig.legend(lines, labels, bbox_to_anchor=(1.01,1.0), loc='upper left', fontsize=18)
-    plt.suptitle('DITD - '+title, fontsize = 22)
-    plt.savefig(figure_path + 'data_publication/DITD_' + var + '.png',bbox_inches='tight')
+
+    lines = [Line2D([0], [0], color=c, linewidth=1.1, linestyle='-') for c in colors]
+    labels_local = ['2017','2018','2019','2020','2021','2022','2023','2024']
+    fig.legend(lines, labels_local, bbox_to_anchor=(1.01,1.0), loc='upper left', fontsize=12)
+    plt.suptitle('DITD ', fontsize = 18)
+    plt.savefig(figure_path + 'data_publication/DITD_' + var + '_uncertainty.png',bbox_inches='tight')
     plt.show()
     plt.close('all')
+
+
+
+doy_DITD('P','Pressure ', ' [dbar]' ,1220)
+doy_DITD('SA','SA ', ' [g/kg]',1220)
+doy_DITD('CT','CT ', ' [$\degree$C]',1220)
+doy_DITD('spe','Speed ', ' [cm/s]',1240)
+
 #%%
 
-doy_DITD('P','Pressure', ' [dbar]' ,1220)
-doy_DITD('S','Practical Salinity', ' [psu]',1220)
-doy_DITD('T','Temperature', ' [$\degree$C]',1220)
-doy_DITD('spe','speed', ' [cm/s]',1240)
+csv_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/data/'
+files = sorted(glob(csv_path+'s*DITS*.nc'))  #+ glob(csv_path+'s1803DITS3_15257*.nc')
+thermistors = pd.read_csv(csv_path + 'instrumentlist.csv')
+spefiles = sorted(glob(csv_path + 'c*DITS*.nc'))
+linestyle = ['-','--','-','--','-','--','-','--','-','--']
+years = np.arange(2014,2023)
 
-#%% DITS 
+lon = 155.0
+lat = -78.0
+
+
+
+def SA_CT(ds):
+    # Remove NaNs first
+    SP = ds['S'].where(ds['S'].notnull())
+    t_in = ds['T'].where(ds['T'].notnull())
+    P_in = ds['P'].where(ds['P'].notnull())
+    
+    SA_vals = gsw.SA_from_SP(SP.values, P_in.values, lon, lat)
+    CT_vals = gsw.CT_from_t(SA_vals, t_in.values, P_in.values)
+    
+    SA_da = xr.DataArray(SA_vals, coords=ds['S'].coords, dims=ds['S'].dims,
+                         name='SA', attrs={'long_name':'Absolute Salinity', 'units':'g kg-1'})
+    CT_da = xr.DataArray(CT_vals, coords=ds['T'].coords, dims=ds['T'].dims,
+                         name='CT', attrs={'long_name':'Conservative Temperature', 'units':'degC'})
+    
+    ds = ds.assign(SA=SA_da, CT=CT_da)
+    return ds
+
+def DITS(var, title, units):
+    fig, ax = plt.subplots(nrows=3, figsize=(11,9), layout='constrained', sharex=True)
+    
+    if var == 'spe':
+        file_list = spefiles
+    else:
+        file_list = files
+
+    for i, file_path in enumerate(file_list):
+        data = xr.open_dataset(file_path)
+        if var in ['SA','CT']:
+            data = SA_CT(data)
+        
+        # get depth from thermistors CSV
+        depth = thermistors['depth'].iloc[np.where(thermistors['filename'] == os.path.basename(file_path)[:-3])[0][0]]
+        
+        # determine subplot based on depth
+        if depth < 200:
+            pos = 0
+        elif depth < 400:
+            pos = 1
+        else:
+            pos = 2
+        
+        for c, yr in enumerate(years):
+            ds_year = data.sel(DateTime=slice(datetime(yr,1,1), datetime(yr,12,31)))
+            
+            # skip if empty or all NaN
+            if len(ds_year.DateTime) == 0 or var not in ds_year or ds_year[var].notnull().sum() == 0:
+                # print(f"Skipping {var} for year {yr}, depth {depth}m: all NaN")
+                continue
+            
+            # median by day of year
+            days = ds_year.groupby('DateTime.dayofyear').median(dim='DateTime')
+            da = days[var]
+            
+            # plot median line
+            da.plot(ax=ax[pos], c=colors[c], label=str(depth), linestyle=linestyle[i % len(linestyle)])
+            
+            # plot uncertainty bands if data exists
+            valid_data = da.dropna(dim='dayofyear', how='all') if 'dayofyear' in da.coords else da.dropna(dim='DateTime', how='all')
+            if len(valid_data) > 0:
+                try:
+                    x, lower, upper = compute_bands(valid_data, var)
+                    ax[pos].fill_between(x, lower, upper, alpha=0.15, color=colors[c])
+                except Exception:
+                    pass
+        
+        # subplot styling
+        ax[pos].set_xlabel(' ')
+        ax[pos].set_ylabel(title + ' ' + units, fontsize=15)
+        ax[pos].tick_params(axis='both', which='major', labelsize=15)
+        ax[pos].set_title(f'depth = {depth} m', fontsize=15)
+    
+    # x-axis ticks and labels
+    xticks = np.cumsum([0,31,28,31,30,31,30,31,31,30,31,30])
+    xlabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+    ax[2].set_xticks(xticks, xlabels)
+    ax[2].set_xlim(0,365)
+    
+    # invert y-axis for pressure
+    if var == 'P':
+        for x in range(3):
+            ax[x].invert_yaxis()
+    
+    # legends
+    ax[0].legend(title='depth', loc='lower right')
+    ax[1].legend(title='depth', loc='lower right')
+    ax[2].legend(title='depth', loc='lower right')
+    
+    # overall figure legend for years
+    lines = [Line2D([0], [0], color=colors[i % len(colors)], linewidth=1.5) for i in range(len(years))]
+    fig.legend(lines, [str(y) for y in years], bbox_to_anchor=(1.01,1.0), loc='upper left', fontsize=22)
+    # lines = [Line2D([0], [0], color=c, linewidth=1.1, linestyle='-') for c in colors]
+    # fig.legend(lines, labels, bbox_to_anchor=(1.01,1.0), loc='upper left', fontsize=18)
+    
+    plt.suptitle('DITS ' , fontsize=22)
+    plt.savefig(figure_path + f'data_publication/DITS_{var}_uncertainty.png', bbox_inches='tight')
+    plt.show()
+    plt.close('all')
+
+
+
+
+for var, title, units in [('SA','SA ','[g/kg]'),
+                          ('CT','CT ', r'[$\degree$C]'),
+                          ('P','Pressure ','[dbar]'),
+                          ('spe','speed ','[cm/s]')]:
+    DITS(var, title, units)
+    
+# var = 'SA'
+# title = 'SA '
+# units = '[g/kg]'
+# DITS(var, title, units)
+
+# var = 'CT'
+# title = 'CT '
+# units = ' [$\degree$C]'
+# DITS(var, title, units)
+
+# var = 'P'
+# title = 'P'
+# units = ' [dbar]'
+# DITS(var, title, units)
+
+
+# var = 'spe'
+# title = 'Speed'
+# units = ' [cm/s]'
+# DITS(var, title, units)
+
+
+
+#%% 3 depth plot
+
+# colors = ['tab:blue','tab:green','tab:orange','tab:purple','tab:gray',\
+          # 'tab:pink','tab:red','tab:cyan','tab:olive']
+
+# years = np.arange(2014,2023)
+# colors = ['tab:blue','tab:green','tab:orange','tab:purple','tab:gray',\
+#           'tab:pink','tab:red','tab:cyan','tab:olive','orange','darkmagenta', 'black']
+# labels = ['2014','2015','2016','2017','2018','2019','2020','2021','2022','2023','2024', 'climatology mean']
+# def doy_plot(DS, var, depth,title,ylabel, units):
+#     plt.close('all')
+#     fig, ax = plt.subplots(nrows = len(depth), figsize = (11,len(depth)*3), sharex = True,layout='constrained' )
+#     pos = 0
+    
+#     for d in depth:
+#         c = 0
+#         for year in years:
+#             if year == 2014:
+#                 ds = DS.sel(time = slice(datetime(year,12,12),datetime(year,12,31)))
+#             else:
+#                 ds = DS.sel(time = slice(datetime(year,1,1),datetime(year,12,31)))
+                
+#             if d == 668 and year == 2019:
+#                 pass
+
+#             elif d == 668 and year == 2020:
+#                 days = ds.sel(time = slice(datetime(2020,3,20),datetime(2020,12,31))).groupby('time.dayofyear').median(dim = 'time')
+#                 days[var].sel(depth = d).plot(label = str(year),ax = ax[pos], c = colors[c])
+#                 ax[pos].set_xlabel(' ')
+#                 ax[pos].tick_params(axis='both', which='major', labelsize=15)
+#             else: # year != 2019 and year != 2020 and d == 668:
+#                 days = ds.groupby('time.dayofyear').median(dim = 'time')
+#                 days[var].sel(depth = d).plot(label = str(year),ax = ax[pos], c = colors[c])
+#                 ax[pos].set_xlabel(' ')
+#                 ax[pos].tick_params(axis='both', which='major', labelsize=15)
+#             c +=1
+#         if var != 'P':
+#             DS[var].sel(depth = d).groupby('time.dayofyear').median(dim = 'time').plot(ax = ax[pos], label = 'climatology', c = 'black', linewidth = 3)
+#         ax[pos].set_title(f'depth = {d} m', fontsize=15) 
+#         ax[pos].set_ylabel(ylabel + units, fontsize = 15)
+        
+#         pos += 1
+        
+#     xticks = np.cumsum([0,31,28,31,30,31,30,31,31,30,31,30])
+#     xlabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+#     ax[len(depth)-1].set_xticks(xticks,xlabels)    
+#     # fig.legend(loc = 'lower right')
+#     ax[len(depth)-1].set_xlim(0,365)
+    
+#     if var =='P':
+#         ax[1].set_ylim(290,269)
+#         ax[0].invert_yaxis()
+#         ax[2].invert_yaxis()
+    
+#     lines = [Line2D([0], [0], color=c, linewidth=1.1, linestyle='-') for c in colors]   
+    
+#     fig.legend(lines, labels, bbox_to_anchor=(1.01,1.0), loc='upper left', fontsize=18)
+#     plt.suptitle(title, fontsize = 22)
+#     plt.savefig(figure_path + 'data_publication/DITN_' + var + '.png',bbox_inches='tight')
+#     plt.show()
+
+
+
+# doy_plot(DITN, 'SA',[75,275,668], 'DITN - Absolute Salinity','Absolute Salinity ','[g/kg]')
+
+# doy_plot(DITN, 'CT',[75,275,668], 'DITN -  Conserved Temperature','Conserved Temperature','$\degree$C')
+
+# doy_plot(DITN, 'P',[75,275,668], 'DITN - Pressure','pressure', '[dbar]')
+# doy_plot(DITN, 'spe',[76,265,670], 'DITN - speed','speed',' [cm/s]')
+
+
+
+
+# colors = ['tab:purple','tab:gray','tab:pink','tab:red','tab:cyan','tab:olive','orange','darkmagenta']
+# DS = DITD
+
+
+# # fig, ax = plt.subplots( figsize = (11,3), layout='constrained' )
+
+# def doy_DITD(var,title,units,d):
+#     years = np.arange(2017,2025)
+#     fig, ax = plt.subplots( figsize = (11,3), layout='constrained' )
+#     c = 0
+#     for year in years:
+#         if year == 2017:
+#             ds = DS.sel(time = slice(datetime(year,2,1),datetime(year,12,31)))
+#         else:
+#             ds = DS.sel(time = slice(datetime(year,1,1),datetime(year,12,31)))
+#         # print(year)
+#         days = ds.groupby('time.dayofyear').median(dim = 'time')
+#         days[var].sel(depth = d).plot(label = str(year),ax = ax, c = colors[c])
+
+#         c +=1
+    
+
+
+#     ax.tick_params(axis='both', which='major', labelsize=15)
+#     xticks = np.cumsum([0,31,28,31,30,31,30,31,31,30,31,30])
+#     xlabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+#     ax.set_xticks(xticks,xlabels)  
+#     ax.set_title(f'depth = {d} m', fontsize=15) 
+#     # fig.legend(loc = 'lower right')
+#     ax.set_xlim(0,365)
+    
+#     if var == 'P':
+#         ax.invert_yaxis()
+#     else:
+#         DS[var].sel(depth = d).groupby('time.dayofyear').median(dim = 'time').plot(ax = ax, label = 'climatology', c = 'black', linewidth = 3)
+#     ax.set_ylabel(f'{title} {units}', fontsize=15)
+#     ax.set_xlabel(' ')
+#     lines = [Line2D([0], [0], color=c, linewidth=1.1, linestyle='-') for c in colors]   
+#     labels = ['2017','2018','2019','2020','2021','2022','2023','2024']
+#     fig.legend(lines, labels, bbox_to_anchor=(1.01,1.0), loc='upper left', fontsize=18)
+#     plt.suptitle('DITD - '+title, fontsize = 22)
+#     plt.savefig(figure_path + 'data_publication/DITD_' + var + '.png',bbox_inches='tight')
+#     plt.show()
+#     plt.close('all')
+
+
+# doy_DITD('P','Pressure', ' [dbar]' ,1220)
+# doy_DITD('SA','Absolute Salinity', ' [g/kg]',1220)
+# doy_DITD('CT','Conserved Temperature', ' [$\degree$C]',1220)
+# doy_DITD('spe','speed', ' [cm/s]',1240)
+
+#%%
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -221,9 +595,12 @@ linestyle = ['-','--','-','--','-','--','-','--','-','--']
 def DITS(var, title, units):
     fig, ax = plt.subplots( nrows = 3,figsize = (11,9), layout='constrained', sharex = True )
     if var == 'spe':
-        files = spefiles
-    for i in range(len(files)):
-        data = xr.open_dataset(files[i])
+        file_list = spefiles
+    else:
+        file_list = files
+    
+    for i in range(len(file_list)):
+        data = xr.open_dataset(file_list[i])
         depth = thermistors['depth'][np.where(thermistors['filename'] == (os.path.basename(files[i][:-3])))[0][0]]
         
         if depth <200:
@@ -270,11 +647,12 @@ def DITS(var, title, units):
     plt.savefig(figure_path + 'data_publication/DITS_' + var + '.png',bbox_inches='tight')
     plt.show() 
     plt.close('all')
+
 #%%
 
 var = 'S'
 title = 'Salinity'
-units = '[psu]'
+units = '[g/kg]'
 DITS(var, title, units)
 
 var = 'T'
@@ -288,7 +666,482 @@ units = ' [dbar]'
 DITS(var, title, units)
 
 
-var = 'spe'
-title = 'Speed'
-units = ' [cm/s]'
-DITS(var, title, units)
+# var = 'spe'
+# title = 'Speed'
+# units = ' [cm/s]'
+# DITS(var, title, units)
+
+#%% Winter plots
+
+
+def winterplot(DS, var, depth,title,years, colors, labels):
+    plt.close('all')
+    fig, ax = plt.subplots(nrows = len(depth), figsize = (11,len(depth)*3), sharex = True,layout='constrained' )
+    pos = 0
+    
+    for d in depth:
+        c = 0
+        for year in years:
+            if year == 2014:
+                ds = DS.sel(time = slice(datetime(year,8,1),datetime(year,10,1)))
+            else:
+                ds = DS.sel(time = slice(datetime(year,8,1),datetime(year,10,1)))
+                
+            if d == 668 and year == 2019:
+                pass
+
+            elif d == 668 and year == 2020:
+                days = ds.sel(time = slice(datetime(2020,8,1),datetime(2020,10,1))).groupby('time.dayofyear').median(dim = 'time')
+                days[var].sel(depth = d).plot(label = str(year),ax = ax[pos], c = colors[c])
+                ax[pos].set_xlabel(' ')
+                ax[pos].tick_params(axis='both', which='major', labelsize=11)
+            else: # year != 2019 and year != 2020 and d == 668:
+                days = ds.groupby('time.dayofyear').median(dim = 'time')
+                days[var].sel(depth = d).plot(label = str(year),ax = ax[pos], c = colors[c])
+                ax[pos].set_xlabel(' ')
+                ax[pos].tick_params(axis='both', which='major', labelsize=11)
+            c +=1
+        pos += 1
+        
+    xticks = np.cumsum([0,31,28,31,30,31,30,31,31,30,31,30])
+    xlabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+    ax[len(depth)-1].set_xticks(xticks,xlabels)    
+    # fig.legend(loc = 'lower right')
+    ax[len(depth)-1].set_xlim(212,273)
+    # ax[0].ylim()
+    
+    
+    
+    lines = [Line2D([0], [0], color=c, linewidth=1.1, linestyle='-') for c in colors]   
+    
+    fig.legend(lines, labels, bbox_to_anchor=(1.01,1.0), loc='upper left', fontsize=15)
+    plt.suptitle(title, fontsize = 15)
+    plt.savefig(figure_path + 'data_publication/winter_' + var + '.png',bbox_inches='tight')
+    plt.show()
+
+
+years = np.arange(2015,2021)
+colors = ['tab:green','tab:orange','tab:purple','tab:gray',\
+          'tab:pink','tab:red','tab:cyan','tab:olive']
+labels = ['2015','2016','2017','2018','2019','2020','2021','2022']
+winterplot(DITN, 'SA',[75,275,668], 'DITN - Absolute Salinity',years,colors,labels)
+
+winterplot(DITN, 'CT',[75,275,668], 'DITN - Conserved Temperature',years,colors,labels)
+
+# doy_plot(DITN, 'P',[75,275,668], 'DITN - Pressure',years,colors,labels)
+
+
+
+#%%
+
+# Temperatures
+
+
+# for year in range(2014,2023):
+#     if year == 2014:
+#         ds = DITN.sel(time = slice(datetime(year,12,12),datetime(year+1,1,1)))
+#     else:
+#         ds = DITN.sel(time = slice(datetime(year,1,1),datetime(year+1,1,1)))
+#     days = ds.groupby('time.dayofyear').median(dim = 'time')
+#     days.T.sel(depth = 75).plot(label = str(year))
+    
+# plt.legend(loc = 'upper centre')
+# plt.xlim(0,365)
+
+# plt.close('all')
+# for year in range(2014,2023):
+#     if year == 2014:
+#         ds = DITN.sel(time = slice(datetime(year,12,12),datetime(year+1,1,1)))
+#     else:
+#         ds = DITN.sel(time = slice(datetime(year,1,1),datetime(year+1,1,1)))
+#     days = ds.groupby('time.dayofyear').median(dim = 'time')
+#     days.T.sel(depth = 275).plot(label = str(year))
+# xticks = np.cumsum([0,31,28,31,30,31,30,31,31,30,31,30])
+# xlabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+# plt.xticks(xticks,xlabels)
+# plt.legend(loc = 'upper right')
+# plt.xlim(0,365)
+
+# DITN.sel(time = DITN.time.dt.season == 'JJA')
+
+plt.close('all')
+for year in range(2014,2023):
+    if year == 2014:
+        ds = DITN.sel(time = slice(datetime(year,12,12),datetime(year+1,1,1)))
+    else:
+        ds = DITN.sel(time = slice(datetime(year,1,1),datetime(year+1,1,1)))
+    days = ds.groupby('time.dayofyear').median(dim = 'time')
+    days.T.sel(depth = 668).plot(label = str(year))
+xticks = np.cumsum([0,31,28,31,30,31,30,31,31,30,31,30])
+xlabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+plt.xticks(xticks,xlabels)
+plt.ylim(-1.915,-1.885)
+plt.legend(loc = 'upper right')
+plt.xlim(0,365)
+
+
+
+#%%
+
+
+for year in range(2014,2023):
+    if year == 2014:
+        ds = DITN.sel(time = slice(datetime(year,12,12),datetime(year,12,31)))
+    else:
+        ds = DITN.sel(time = slice(datetime(year,1,1),datetime(year+1,1,1)))
+    days = ds.groupby('time.dayofyear').median(dim = 'time')
+    days.SA.sel(depth = 75).plot(label = str(year))
+xticks = np.cumsum([0,31,28,31,30,31,30,31,31,30,31,30])
+xlabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+plt.xticks(xticks,xlabels)    
+plt.legend(loc = 'lower right')
+plt.xlim(0,365)
+plt.show()
+
+plt.close('all')
+for year in range(2014,2023):
+    if year == 2014:
+        ds = DITN.sel(time = slice(datetime(year,12,12),datetime(year,12,31)))
+    else:
+        ds = DITN.sel(time = slice(datetime(year,1,1),datetime(year+1,1,1)))
+    days = ds.groupby('time.dayofyear').median(dim = 'time')
+    days.SA.sel(depth = 275).plot(label = str(year))
+xticks = np.cumsum([0,31,28,31,30,31,30,31,31,30,31,30])
+xlabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+plt.xticks(xticks,xlabels)
+plt.legend(loc = 'lower right')
+plt.xlim(0,365)
+plt.show()
+
+
+plt.close('all')
+for year in range(2014,2023):
+    if year == 2014:
+        ds = DITN.sel(time = slice(datetime(year,12,12),datetime(year,12,31)))
+    else:
+        ds = DITN.sel(time = slice(datetime(year,1,1),datetime(year+1,1,1)))
+    days = ds.groupby('time.dayofyear').median(dim = 'time')
+    days.SA.sel(depth = 668).plot(label = str(year))
+xticks = np.cumsum([0,31,28,31,30,31,30,31,31,30,31,30])
+xlabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+plt.xticks(xticks,xlabels)
+plt.ylim(34.9,35.05)
+plt.legend(loc = 'lower right')
+plt.xlim(0,365)
+plt.show()
+
+#%%
+interval = 6
+
+# ds = xr.open_dataset(ds_path+'DITN_mooring.nc')
+# ds_weekly_av = ds.resample(time=str(interval)+"D").mean()
+
+def timeseries(ds,tipe,suptitle,variable,depth,title):
+    plt.close('all')
+    # row = len(depth)
+    if variable == 'T' and tipe == 'DITN' :
+        row = 7 
+        
+    else:
+        row = len(depth)
+    
+    fig, ax = plt.subplots(nrows = row,ncols = 1,\
+            figsize = (11,3*row), sharex = True,layout='constrained')
+    
+    for d in range(row):
+        ds[variable].sel(depth = depth[d]).plot(ax=ax[d])
+        ax[d].set_xlim(ds.time[d],ds.time[-1])
+        ax[d].set_xlabel(' ')
+        ax[d].set_title(title[d]+r', depth $\approx$'+str(depth[d]))
+    
+    plt.suptitle(suptitle, fontsize = 15)     
+    
+    
+    if variable == 'T' and tipe == 'DITN' :
+        plt.savefig(figure_path+'prethesisfigs/'+variable+'_'+tipe+'_top.png')
+        plt.close('all')
+        # print(len(depth) - row)
+        fig, ax = plt.subplots(nrows = (len(depth)-row),ncols = 1,\
+            figsize = (11,3*(len(depth)-row)), sharex = True,layout='constrained')
+        #
+        for d in range(row,len(depth)):
+            ds[variable].sel(depth = depth[d]).plot(ax=ax[d-row])
+            ax[d-row].set_xlim(ds.time[d],ds.time[-1])
+            ax[d-row].set_xlabel(' ')
+            ax[d-row].set_title(title[d]+r', depth $\approx$'+str(depth[d]))
+        
+        plt.suptitle(suptitle + ' continued', fontsize = 15)     
+        plt.savefig(figure_path+'prethesisfigs/'+variable+'_'+tipe+'_bottom.png')
+    else:
+        plt.savefig(figure_path+'prethesisfigs/'+variable+'_'+tipe+'.png')
+    
+    
+    plt.show()
+
+#%%
+
+
+ds = xr.open_dataset(ds_path+'DITN_mooring.nc')
+
+timeseries(ds,'DITN','Conserved temperature [C$\degree$]','CT',[75,275,668],['subsurface mooring','intermediate mooring','bottom mooring'])
+timeseries(ds,'DITN','Absolute Salinity [g/kg]','SA',[75,275,668],['subsurface mooring','intermediate mooring','bottom mooring'])
+timeseries(ds,'DITN','Density [$kg/m^3$]','sig_t',[75,275,668],['subsurface mooring','intermediate mooring','bottom mooring'])
+
+timeseries(ds,'DITN','Pressure [mbar]','P',[75,76,265,275,670,668],['mcat subsurface mooring','aquadopp subsurface mooring',\
+                                                        'mcat intermediate mooring','aquadopp intermediate mooring',\
+                                                        'aquadopp bottom mooring', 'mcat bottom mooring'])
+timeseries(ds,'DITN','Current speed [m/s]','speed',[74,76,265,274,670,672],['rcm9 subsurface mooring','aquadopp subsurface mooring',\
+                                                        'aquadopp intermediate mooring','rcm9 intermediate mooring',\
+                                                        'aquadopp bottom mooring', 'rcm9 bottom mooring'])
+timeseries(ds,'DITN','Direction of current [degrees]','direction',[74,76,265,274,670,672],['rcm9 subsurface mooring','aquadopp subsurface mooring',\
+                                                        'aquadopp intermediate mooring','rcm9 intermediate mooring',\
+                                                        'aquadopp bottom mooring', 'rcm9 bottom mooring'])
+
+    
+timeseries(ds,'DITN','Heading [degrees]','heading',[76,265,670],['subsurface mooring','intermediate mooring','bottom mooring'])
+timeseries(ds,'DITN','Roll [degrees]','Roll',[76,265,670],['subsurface mooring','intermediate mooring','bottom mooring'])
+timeseries(ds,'DITN','Pitch [degrees]','pitch',[76,265,670],['subsurface mooring','intermediate mooring','bottom mooring'])
+
+
+timeseries(ds,'DITN','zonal velocity [m/s]','u',[76,265,670],['subsurface mooring','intermediate mooring','bottom mooring'])
+timeseries(ds,'DITN','meridional velocity [m/s]','v',[76,265,670],['subsurface mooring','intermediate mooring','bottom mooring'])
+timeseries(ds,'DITN','vertical velocity [m/s]','w',[76,265,670],['subsurface mooring','intermediate mooring','bottom mooring'])
+    
+timeseries(ds,'DITN','Temperature [C$\degree$]','T',[74,75,76,115,155,195,205,235,365,265,274,275,668,670],['rcm9','mcat subsurface mooring','aquadopp subsurface mooring',\
+                                                        'SBE56','SBE56','SBE56','SBE56','SBE56','SBE56',\
+                                                        'aquadopp subsurface mooring','mcat intermediate mooring','rcm9',\
+                                                        'aquadopp bottom mooring', 'mcat bottom mooring'])
+timeseries(ds,'DITN','Density calculated [kg/m3]','rho',[75,275,668],['subsurface mooring','intermediate mooring','bottom mooring'])
+
+#%%
+
+tipe,suptitle,variable,depth,title = 'DITN','Conserved temperature [C$\degree$]','CT',[75,275,668],['subsurface mooring','intermediate mooring','bottom mooring']
+ymin = -1.92
+ymax = -1.88
+
+tipe,suptitle,variable,depth,title = 'DITN','Absolute Salinity [g/kg]','SA',[75,275,668],['subsurface mooring','intermediate mooring','bottom mooring']
+ymin = 34.9
+ymax = 35.05
+
+deployed = ['12/15/2015','2/9/2017','3/14/2018','1/2/2019','3/19/2020']
+
+
+plt.close('all')
+# row = len(depth)
+if variable == 'T' and tipe == 'DITN' :
+    row = 7 
+    
+else:
+    row = len(depth)
+
+fig, ax = plt.subplots(nrows = row,ncols = 1,\
+        figsize = (11,3*row), sharex = True,layout='constrained')
+
+for d in range(row):
+    if d < 2:
+        ds[variable].sel(depth = depth[d]).plot(ax=ax[d],zorder = 0)
+        print(d)
+        for y in range(len(deployed)):
+            try:
+                ds[variable].sel(depth = depth[d]).sel(time = slice(deployed[y]+'T00:00:00',deployed[y]+'T01:00:00'))\
+                    .plot.scatter(ax=ax[d],c = 'red', s = 100, zorder=1)
+            except:
+                print(deployed[y])
+        ax[d].set_xlim(ds.time[d],ds.time[-1])
+        ax[d].set_xlabel(' ')
+        ax[d].set_title(title[d]+r', depth $\approx$'+str(depth[d]))
+    else:
+        ds[variable].sel(depth = depth[d]).plot(ax=ax[d],zorder = 0)
+        for y in range(len(deployed)):
+            try:
+                ds[variable].sel(depth = depth[d]).sel(time = slice(deployed[y]+'T00:00:00',deployed[y]+'T01:00:00'))\
+                    .plot.scatter(ax=ax[d],c = 'red', s = 100, zorder=1)
+            except:
+                print(deployed[y])
+        ax[d].set_ylim(ymin,ymax)
+        ax[d].set_xlim(ds.time[d],ds.time[-1])
+        ax[d].set_xlabel(' ')
+        ax[d].set_title(title[d]+r', depth $\approx$'+str(depth[d]))
+
+plt.suptitle(suptitle, fontsize = 15)     
+
+# plt.savefig(figure_path+'prethesisfigs/'+variable+'_'+tipe+'_fixed.png')
+
+#%%
+
+DS =  xr.open_dataset(ds_path+'DITD_mooring.nc')
+timeseries(DS,'DITD','Conserved temperature [C$\degree$]','CT',[1122,1220],['mcat mooring','mcat mooring'])
+timeseries(DS,'DITD','Absolute Salinity [g/kg]','SA',[1122,1220],['mcat mooring','mcat mooring'])
+timeseries(DS,'DITD','Density [$kg/m^3$]','sig_t',[1122,1220],['mcat mooring','mcat mooring'])
+
+timeseries(DS,'DITD','Pressure [mbar]','P',[1122,1145,1220,1240],['mcat mooring','aquadopp mooring','mcat mooring','aquadopp mooring'])
+timeseries(DS,'DITD','Current speed [m/s]','spe',[1145,1240],['aquadopp mooring','aquadopp mooring'])
+timeseries(DS,'DITD','Direction of current [degrees]','dirt',[1145,1240],['aquadopp mooring','aquadopp mooring'])
+
+    
+timeseries(DS,'DITD','Heading [degrees]','heading',[1145,1240],['aquadopp mooring','aquadopp mooring'])
+timeseries(DS,'DITD','Roll [degrees]','Roll',[1145,1240],['aquadopp mooring','aquadopp mooring'])
+timeseries(DS,'DITD','Pitch [degrees]','pitch',[1145,1240],['aquadopp mooring','aquadopp mooring'])
+
+
+timeseries(DS,'DITD','zonal velocity [m/s]','u',[1145,1240],['aquadopp mooring','aquadopp mooring'])
+timeseries(DS,'DITD','meridional velocity [m/s]','v',[1145,1240],['aquadopp mooring','aquadopp mooring'])
+timeseries(DS,'DITD','vertical velocity [m/s]','w',[1145,1240],['aquadopp mooring','aquadopp mooring'])
+    
+timeseries(DS,'DITD','Temperature [C$\degree$]','T',[1122,1145,1220,1240],['mcat mooring','aquadopp mooring','mcat mooring','aquadopp mooring'])
+                                                        
+timeseries(DS,'DITD','Density calculated [kg/m3]','rho',[1122,1220],['mcat mooring','mcat mooring'])
+
+#%%
+
+def timeseries_DITS(ds,tipe,suptitle,variable,depth,title):
+    plt.close('all')
+    row = max([len(depth[0]),len(depth[1])])
+    #len(depth)
+    if variable == 'T':
+        fig, ax = plt.subplots(nrows = row,ncols = 2,width_ratios=[1,2],\
+                figsize = (11,2*row), sharex = 'col', layout='constrained')
+    else:
+        fig, ax = plt.subplots(nrows = row,ncols = 2,width_ratios=[1,2],\
+            figsize = (11,2.5*row), sharex = 'col', layout='constrained')
+    t = 0
+    for c in range(2):
+        for d in range(len(depth[c])):
+            ds[variable].sel(depth = depth[c][d]).plot(ax=ax[d][c])
+            ax[0][0].set_xlim(ds.time[0],datetime(2018,3,9))   
+            ax[0][1].set_xlim(datetime(2018,3,9),ds.time[-1])
+            ax[d][c].set_xlabel(' ')
+            ax[d][c].set_title(title[t]+r', depth $\approx$'+str(depth[c][d]))
+            t+=1    
+    plt.suptitle(suptitle, fontsize = 15)     
+    plt.savefig(figure_path+'prethesisfigs/'+variable+'_'+tipe+'.png')
+    
+    
+    plt.show()
+
+#%%
+
+DS =  xr.open_dataset(ds_path+'DITS_mooring.nc')
+
+r = 'rcm9 mooring'
+m = 'mcat mooring'
+a = 'aquadopp mooring'
+s = 'sbe56'
+e = ' '
+
+timeseries_DITS(DS,'DITS','Conserved temperature [C$\degree$]','CT',[[192, 392, 1088],[45, 243, 1044]],[m,m,m,m,m,m])
+timeseries_DITS(DS,'DITS','Absolute Salinity [g/kg]','SA',[[192, 392, 1088],[45, 243, 1044]],[m,m,m,m,m,m])
+timeseries_DITS(DS,'DITS','Density [$kg/m^3$]','sig_t',[[192, 392, 1088],[45, 243, 1044]],[m,m,m,m,m,m])
+
+timeseries_DITS(DS,'DITS','Pressure [mbar]','P',[[192, 392, 1088],[45,49, 229,243,1044, 1064]],[m,m,m,m,a,a,m,m,a])
+
+
+timeseries_DITS(DS,'DITS','Current speed [m/s]','speed',[[191, 393, 1087],[49, 229,1064]],[r,r,r,a,a,a])
+timeseries_DITS(DS,'DITS','Direction of current [degrees]','direction',[[191, 393, 1087],[49, 229, 1064]],[r,r,r,a,a,a])
+
+    
+timeseries(DS,'DITS','Heading [degrees]','heading',[49, 229, 1064],[a,a,a])
+timeseries(DS,'DITS','Roll [degrees]','Roll',[49, 229, 1064],[a,a,a])
+timeseries(DS,'DITS','Pitch [degrees]','pitch',[49, 229, 1064],[a,a,a])
+
+
+timeseries(DS,'DITS','zonal velocity [cm/s]','u',[49, 229, 1064],[a,a,a])
+timeseries(DS,'DITS','meridional velocity [cm/s]','v',[49, 229, 1064],[a,a,a])
+timeseries(DS,'DITS','vertical velocity [cm/s]','w',[49, 229, 1064],[a,a,a])
+    
+timeseries_DITS(DS,'DITS','Temperature [C$\degree$]','T',[[191,192,233,273,314,354,392,393,1087,1088],[45,49,90,130,170,210,229,243,1044,1064]],[r,m,s,s,s,s,m,r,r,m,m,a,s,s,s,s,a,m,m,a])
+                                                        
+timeseries_DITS(DS,'DITS','Density calculated [kg/m3]','rho',[[192, 392, 1088],[45, 243, 1044]],[m,m,m,m,m,m])
+
+
+
+
+#%%
+
+""" Phase definition """
+
+
+ds = xr.open_dataset(ds_path+'DITN_mooring.nc')
+ds_weekly_av = ds.resample(time=str(interval)+"D").mean()
+
+depth = 75
+ax1_75 = [-2.8,-0.8]
+axdt_75 = [-0.5,0.5]
+ax_sa_75 = [33.9,35]
+ax_dsa_75 = [-0.3,0.3]
+
+depth = 275
+ax1_275 = [-2.1,-1.5]
+axdt_275 = [-0.5,0.5]
+ax_sa_275 = [33.9,35]
+ax_dsa_275 = [-0.3,0.3]
+
+depth = 668
+ax1_668 = [-1.92,-1.88]
+axdt_668 = [-0.02,0.02]
+ax_sa_668 = [34.8,35.1]
+ax_dsa_668 = [-0.1,0.1]
+
+def multi_day_mean(depth,variable,ax1,dax):
+    for year in range(2015,2022):
+        plt.close('all')
+        weekly_av = ds_weekly_av.sel(time = slice('12/01/'+str(year-1),'01/01/'+str(year+1)))
+        data = ds.sel(time = slice('12/01/'+str(year-1),'01/01/'+str(year+1)))
+        
+        fig, ax = plt.subplots()
+        ax2 = ax.twinx()
+        
+        if variable == 'CT':
+            """CT"""    
+            DT = data.CT.sel(depth = depth) - np.roll(data.CT.sel(depth = depth), axis = 0, shift = 1) 
+            ddt =  DT - np.roll(DT, axis = 0, shift = 1) 
+            weekly_av_DT = weekly_av.CT.sel(depth = depth) - np.roll(weekly_av.CT.sel(depth = depth), axis = 0, shift = 1) 
+            weekly_av_ddt = weekly_av_DT - np.roll(weekly_av_DT, axis = 0, shift = 1) 
+            fig, ax = plt.subplots()
+            ax2 = ax.twinx()
+            weekly_av_DT.plot(ax = ax2,color = 'tab:orange',label = r'$\frac{\partial CT}{\partial t}$',alpha = 0.5)
+            weekly_av_ddt.plot(ax = ax2, color = 'tab:green', label = r'$\frac{\partial^2 CT}{\partial t^2}$',alpha = 0.5)
+            data.CT.sel(depth = depth).plot(ax = ax, alpha = 0.5, color = 'tab:blue', label = 'CT')
+            weekly_av.CT.sel(depth = depth).plot(ax = ax, color = 'tab:blue', label = '7d mean')
+            # DT.sel(time = slice('12/01/'+str(year-1),'01/01/'+str(year+1))).plot(ax = ax2, color = 'tab:orange', alpha = 0.5)
+            title = 'CT_interannual_'
+        elif variable == 'SA':
+            """SA"""    
+            SA = data.SA.sel(depth = depth) - np.roll(data.SA.sel(depth = depth), axis = 0, shift = 1) 
+            dSA =  SA - np.roll(SA, axis = 0, shift = 1) 
+            weekly_av_dSA = weekly_av.SA.sel(depth = depth) - np.roll(weekly_av.SA.sel(depth = depth), axis = 0, shift = 1) 
+            weekly_av_ddSA = weekly_av_dSA - np.roll(weekly_av_dSA, axis = 0, shift = 1) 
+            
+            weekly_av_dSA.plot(ax = ax2,color = 'tab:orange',label = r'$\frac{\partial SA}{\partial t}$',alpha = 0.5)
+            weekly_av_ddSA.plot(ax = ax2, color = 'tab:green', label = r'$\frac{\partial^2 SA}{\partial t^2}$',alpha = 0.5)
+            data.SA.sel(depth = depth).plot(ax = ax, alpha = 0.5, color = 'tab:blue', label = 'CT')
+            weekly_av.SA.sel(depth = depth).plot(ax = ax, color = 'tab:blue', label = '7d mean')
+            title = 'SA_interannual_'
+            
+        fig.legend()
+        fig.suptitle('interval days: '+str(interval))
+        ax.set_ylim(ax1)
+        ax2.set_ylim(dax)
+        plt.savefig(figure_path+'Interannual_phases/'+title+str(interval)+'D_'+str(depth)+'_'+str(year)+'.png',bbox_inches='tight')
+        plt.show()
+
+multi_day_mean(75,'SA',ax_sa_75,ax_dsa_75)
+multi_day_mean(75,'CT',ax1_75,axdt_75)
+multi_day_mean(275,'SA',ax_sa_275,ax_dsa_275)
+multi_day_mean(275,'CT',ax1_275,axdt_275)
+multi_day_mean(668,'SA',ax_sa_668,ax_dsa_668)
+multi_day_mean(668,'CT',ax1_668,axdt_668)
+
+
+
+
+
+
+#%%
+
+
+
+
+
+
+
