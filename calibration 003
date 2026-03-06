@@ -1,0 +1,311 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Mar  6 15:04:14 2026
+
+@author: cornelissenl
+
+
+CTD calibration 
+
+"""
+
+
+
+""" Windows """
+comp = '/Users/cornelissenl/'
+"""  Mac """
+# comp = '/Users/livcornelissen/Library/CloudStorage/'
+
+
+
+figure_path = comp +'OneDrive - NIWA/PhD/figures/'
+CTD_path = comp +'OneDrive - NIWA/PhD/Coding/Data/CTD/'
+data_path = comp +'OneDrive - NIWA/PhD/Data/'
+ds_path = comp + 'OneDrive - NIWA/PhD/Coding/Data/datasets/'
+export_path = comp +'OneDrive - NIWA/PhD/Data/calibrated/'
+
+
+instruments = pd.read_csv(data_path + 'instrumentlist.csv')
+deployments = ['1412','1512','1702','1803','1901','2003','2211','2401']
+
+data_path = '/Users/cornelissenl/OneDrive - NIWA/PhD/data/SEANOE/'
+files = sorted(glob(data_path+'*_SBE37*.nc'))
+
+# files_pos = 
+# filenames = ['DITD_1702_SBE37SM','DITD_1803_SBE37SM','DITD_1901_SBE37SM','DITD_2003_SBE37SM','DITD_2211_SBE37SM','DITD_2401_SBE37SM','DITN_1412_SBE37SM'\
+#              'DITN_1512_SBE37SM','DITN_1702_SBE37SM','DITN_1803_SBE37SM','DITN_1901_SBE37SM','DITN_2003_SBE37SM','DITS_1702_SBE37SM','DITS_1803_SBE37SM']
+
+#%%
+
+
+
+#%%
+
+import re
+
+# ---------------------------
+# Helper: get correct CTD folder (Windows-friendly)
+# ---------------------------
+def get_ctd_folder(CTD_base_path, description):
+    """
+    Determine the correct CTD folder from the mooring description.
+
+    Parameters
+    ----------
+    CTD_base_path : str
+        Base path containing CTD folders (CTD1412, CTD1512, ...)
+    description : str
+        NetCDF 'description' attribute
+
+    Returns
+    -------
+    ctd_folder : str
+        Full path to CTD folder
+    mooring_type : str
+        DITD / DITN / DITS
+    mooring_code : str
+        4-digit deployment code
+    """
+    description = description.upper()
+
+    # detect mooring type
+    mooring_type = None
+    for mt in ['DITD', 'DITN', 'DITS']:
+        if mt in description:
+            mooring_type = mt
+            break
+    if mooring_type is None:
+        raise ValueError(f"Cannot determine mooring type from description: {description}")
+
+    # extract 4-digit deployment code
+    mooring_code_match = re.search(r'\b\d{4}\b', description)
+    if mooring_code_match:
+        mooring_code = mooring_code_match.group(0)
+    else:
+        raise ValueError(f"Cannot extract mooring code from description: {description}")
+
+    # Use folder exactly like CTDxxxx
+    ctd_folder = os.path.join(CTD_base_path, f"CTD{mooring_code}")
+    ctd_folder = os.path.normpath(ctd_folder)  # normalize path separators for Windows
+
+    if not os.path.exists(ctd_folder):
+        raise FileNotFoundError(f"CTD folder not found: {ctd_folder}")
+
+    return ctd_folder, mooring_type, mooring_code
+
+
+# ---------------------------
+# 1) Calibration function
+# ---------------------------
+def calibrate_mooring_nc(ds_file, CTD_base_path, cal_threshold=0.003):
+    """
+    Calibrate a mooring NetCDF file using start/end CTD casts.
+
+    Parameters
+    ----------
+    ds_file : str
+        Path to mooring NetCDF file
+    CTD_base_path : str
+        Base path containing CTD folders
+    cal_threshold : float
+        Minimum difference threshold to apply calibration (PSU)
+
+    Returns
+    -------
+    ds_cal : xarray.Dataset (calibrated)
+    correction : np.ndarray (depth x time)
+    """
+    ds = xr.open_dataset(ds_file)
+    description = ds.attrs.get('description', '')
+    
+    # --- find folder ---
+    try:
+        ctd_folder, mooring_type, mooring_code = get_ctd_folder(CTD_base_path, description)
+    except Exception as e:
+        print(e)
+        return ds, np.zeros((ds.z.size, ds.DateTime.size))
+
+    # --- find CTD files (match only mooring type) ---
+    ctd_files = sorted(glob(os.path.join(ctd_folder, f"{mooring_type}*.cnv*")))
+    if len(ctd_files) == 0:
+        print(f"No CTD files found for {mooring_type} in folder {ctd_folder}")
+        return ds, np.zeros((ds.z.size, ds.DateTime.size))
+
+    # --- function to read CTD ---
+    def open_ctd(file):
+        df = pd.read_table(file, sep=r'\s+', skiprows=2, encoding_errors='ignore')
+        header = pd.read_table(file, sep=r'\s+', nrows=0, encoding_errors='ignore').columns.tolist()
+        df.columns = header
+        # determine depth column
+        if 'depth' in df.columns:
+            depth_col = 'depth'
+        elif 'PrDM' in df.columns:
+            depth_col = 'PrDM'
+        else:
+            raise ValueError(f"No depth column in CTD file {file}")
+        return df, depth_col
+
+    # --- open first and last CTDs ---
+    ctd_start, depth_col = open_ctd(ctd_files[0])
+    ctd_end, _ = open_ctd(ctd_files[-1])
+
+    # --- function to get nearest CTD row for a depth ---
+    def nearest_ctd(df, z_val):
+        idx = (np.abs(df[depth_col] - z_val)).argmin()
+        return df.iloc[idx]
+
+    # --- apply calibration ---
+    correction = np.zeros((ds.z.size, ds.DateTime.size))
+    for iz, z_val in enumerate(ds.z.values):
+        ct1 = nearest_ctd(ctd_start, z_val)
+        ct2 = nearest_ctd(ctd_end, z_val)
+
+        dCTD1 = ct1['S'] - float(ds.S.isel(z=iz, DateTime=0))
+        dCTD2 = ct2['S'] - float(ds.S.isel(z=iz, DateTime=-1))
+
+        N = ds.DateTime.size
+        t = np.arange(N)
+
+        if abs(dCTD1) <= cal_threshold and abs(dCTD2) <= cal_threshold:
+            corr = np.zeros(N)
+        else:
+            corr = dCTD1 + (dCTD2 - dCTD1) * t / (N - 1)
+
+        ds['S'][iz, :] = ds.S.isel(z=iz) + corr
+        correction[iz, :] = corr
+
+    return ds, correction
+
+# ---------------------------
+# 2) Plotting function
+# ---------------------------
+def plot_mooring_calibration(ds, correction, ds_file, plot_temp=False):
+    """
+    Plot calibrated salinity vs time and the applied correction.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        Calibrated mooring dataset
+    correction : numpy array
+        Applied correction per depth and time
+    ds_file : str
+        Mooring NetCDF file path
+    plot_temp : bool
+        Plot temperature if True
+    """
+    fname = os.path.basename(ds_file)[:-3]
+    z = ds.z.values
+
+    fig, ax = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+
+    # Salinity
+    for iz, z_val in enumerate(z):
+        ax[0].plot(ds.DateTime, ds.S.isel(z=iz), label=f'z={z_val} m')
+    ax[0].set_ylabel('Salinity [PSU]')
+    ax[0].set_title(f'Calibrated Salinity: {fname}')
+    ax[0].grid(True)
+    ax[0].legend(ncol=2)
+
+    # Correction
+    for iz, z_val in enumerate(z):
+        ax[1].plot(ds.DateTime, correction[iz, :], label=f'z={z_val} m')
+    ax[1].set_ylabel('Applied Correction [PSU]')
+    ax[1].set_xlabel('Time')
+    ax[1].grid(True)
+    ax[1].legend(ncol=2)
+
+    # Temperature (optional)
+    if plot_temp and 'T' in ds:
+        fig2, axT = plt.subplots(figsize=(12, 4))
+        for iz, z_val in enumerate(z):
+            axT.plot(ds.DateTime, ds.T.isel(z=iz), label=f'z={z_val} m')
+        axT.set_ylabel('Temperature [°C]')
+        axT.set_xlabel('Time')
+        axT.set_title(f'Temperature: {fname}')
+        axT.grid(True)
+        axT.legend(ncol=2)
+        plt.tight_layout()
+        plt.show()
+        plt.close(fig2)
+
+    plt.tight_layout()
+    plt.savefig(data_path_out + fname + '.png')
+    plt.show()
+    plt.close(fig)
+
+
+# ---------------------------
+# 3) Apply to files
+# ---------------------------
+files = sorted(glob(os.path.join(data_path, '*_SBE37*.nc')))
+
+data_path_out = '/Users/cornelissenl/OneDrive - NIWA/PhD/data/SEANOE/003_calibration/'
+
+for f in files:
+    ds_cal, corr = calibrate_mooring_nc(f, CTD_path)
+    plot_mooring_calibration(ds_cal, corr, f, plot_temp=True)
+    fname = os.path.basename(f)
+
+    outfile = os.path.join(data_path_out, fname)
+
+    ds_cal.to_netcdf(outfile)
+    
+
+
+#%%
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+def plot_mooring_calibration(ds_orig, ds_cal, title=None):
+    """
+    Plot original and calibrated salinity for each depth in a mooring dataset.
+
+    Parameters
+    ----------
+    ds_orig : xarray.Dataset
+        Original dataset
+    ds_cal : xarray.Dataset
+        Calibrated dataset
+    title : str, optional
+        Plot title
+    """
+    z_vals = ds_orig.z.values
+    time = ds_orig.DateTime.values
+
+    plt.figure(figsize=(10, 6))
+    for iz, z_val in enumerate(z_vals):
+        plt.plot(time, ds_orig.S.isel(z=iz), label=f'Orig z={z_val} m', linestyle='--')
+        plt.plot(time, ds_cal.S.isel(z=iz), label=f'Cal z={z_val} m', linestyle='-')
+
+    plt.xlabel('DateTime')
+    plt.ylabel('Salinity [PSU]')
+    plt.title(title if title else 'Mooring Salinity Calibration')
+    plt.legend(loc='best', fontsize=8)
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+
+
+for f in files:
+    ds_orig = xr.open_dataset(f)
+    ds_cal, _ = calibrate_mooring_nc(f, CTD_path)
+    plot_mooring_calibration(ds_orig, ds_cal, title=os.path.basename(f))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
