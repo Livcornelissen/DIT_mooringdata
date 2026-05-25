@@ -1,0 +1,9 @@
+cff-version: 1.1.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: Liv
+  given-names: Cornelissen
+orcid: https://orcid.org/0009-0003-2053-0674
+title:Livcornelissen/DIT_mooringdata: Processing and Quality Control Code for DIT Mooring Data
+version: v1.0
+date-released: 2026-05-25
